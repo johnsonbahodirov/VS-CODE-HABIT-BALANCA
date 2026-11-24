@@ -11,6 +11,7 @@ import { dayKey, formatMinutes, minutesByHabitAndDay } from "@/lib/balance";
 import { getTodayFocusPlan, getTodayHabits } from "@/lib/today";
 import { useAchievements, useHabitLogs, useHabits, useSessions, useSettings } from "@/lib/data";
 import { detectComeback, scheduledStreakStats } from "@/lib/gamification";
+import { playOptionalSound, vibrate } from "@/lib/haptics";
 
 export const Route = createFileRoute("/_authenticated/today")({
   head: () => ({ meta: [{ title: "Today — Balance" }] }),
@@ -80,13 +81,13 @@ function Today() {
   }, [timerClosed]);
 
   useEffect(() => {
-    const tabletBreakpoint = window.matchMedia("(max-width: 1099px)");
+    const mobileBreakpoint = window.matchMedia("(max-width: 767px)");
     const closeDrawerOnDesktop = (event: MediaQueryListEvent) => {
       if (!event.matches) setMobileTimerOpen(false);
     };
-    tabletBreakpoint.addEventListener("change", closeDrawerOnDesktop);
+    mobileBreakpoint.addEventListener("change", closeDrawerOnDesktop);
     return () => {
-      tabletBreakpoint.removeEventListener("change", closeDrawerOnDesktop);
+      mobileBreakpoint.removeEventListener("change", closeDrawerOnDesktop);
     };
   }, []);
 
@@ -100,7 +101,7 @@ function Today() {
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
-      if (window.matchMedia("(max-width: 1099px)").matches) timerTrigger?.focus();
+      if (window.matchMedia("(max-width: 767px)").matches) timerTrigger?.focus();
     };
   }, [mobileTimerOpen]);
 
@@ -186,6 +187,20 @@ function Today() {
   );
 
   const completedToday = scheduledHabits.filter((habit) => completedHabitIds.has(habit.id)).length;
+  const allHabitsDone = scheduledHabits.length > 0 && completedToday === scheduledHabits.length;
+  const previousAllDone = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    if (habitsQuery.isLoading || logsQuery.isLoading) {
+      previousAllDone.current = null;
+      return;
+    }
+    if (previousAllDone.current === false && allHabitsDone) {
+      vibrate([30, 50, 30, 50, 60]);
+      playOptionalSound("all-done");
+    }
+    previousAllDone.current = allHabitsDone;
+  }, [allHabitsDone, habitsQuery.isLoading, logsQuery.isLoading]);
 
   const completionRate = scheduledHabits.length
     ? Math.round((completedToday / scheduledHabits.length) * 100)
@@ -218,7 +233,7 @@ function Today() {
   return (
     <>
       <DailyGoalSuggestionDialog />
-      <div className="today-layout grid grid-cols-1 gap-5 min-[1100px]:grid-cols-[minmax(0,1fr)_330px]">
+      <div className="today-layout grid grid-cols-1 gap-4 min-[768px]:grid-cols-[minmax(0,1fr)_300px] min-[1100px]:gap-5">
         <section className="today-main-column min-w-0 space-y-5">
           {(sessionsQuery.isError ||
             settingsQuery.isError ||
@@ -374,40 +389,50 @@ function Today() {
                   <Play aria-hidden="true" className="size-4 fill-current text-primary" />
                 </button>
               )}
-              <div className={timerClosed ? "hidden" : ""}>
-                <div className="mb-2 flex min-h-11 items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold">Focus timer</h2>
-                  <button
-                    ref={timerCloseRef}
-                    type="button"
-                    aria-label={
-                      mobileTimerOpen ? "Close focus timer panel" : "Collapse focus timer"
-                    }
-                    onClick={() => {
-                      if (window.matchMedia("(max-width: 1099px)").matches) {
-                        setMobileTimerOpen(false);
-                      } else {
-                        setTimerClosed(true);
+              <div
+                className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                  timerClosed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+                }`}
+              >
+                <div
+                  className="min-h-0 overflow-hidden"
+                  aria-hidden={timerClosed}
+                  inert={timerClosed}
+                >
+                  <div className="mb-2 flex min-h-11 items-center justify-between gap-3">
+                    <h2 className="text-lg font-semibold">Focus timer</h2>
+                    <button
+                      ref={timerCloseRef}
+                      type="button"
+                      aria-label={
+                        mobileTimerOpen ? "Close focus timer panel" : "Collapse focus timer"
                       }
-                    }}
-                    className="flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring min-[1100px]:hidden"
-                  >
-                    <X className="size-5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Collapse focus timer"
-                    onClick={() => setTimerClosed(true)}
-                    className="hidden size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring min-[1100px]:flex"
-                  >
-                    <ChevronDown className="size-4" />
-                  </button>
+                      onClick={() => {
+                        if (window.matchMedia("(max-width: 767px)").matches) {
+                          setMobileTimerOpen(false);
+                        } else {
+                          setTimerClosed(true);
+                        }
+                      }}
+                      className="flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring min-[768px]:hidden"
+                    >
+                      <X className="size-5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Collapse focus timer"
+                      onClick={() => setTimerClosed(true)}
+                      className="hidden size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring min-[768px]:flex"
+                    >
+                      <ChevronDown className="size-4" />
+                    </button>
+                  </div>
+                  <TimerCard
+                    selectedHabitId={selectedTimedHabitId}
+                    onSelectHabit={setSelectedTimedHabitId}
+                    onTimerSnapshot={onTimerSnapshot}
+                  />
                 </div>
-                <TimerCard
-                  selectedHabitId={selectedTimedHabitId}
-                  onSelectHabit={setSelectedTimedHabitId}
-                  onTimerSnapshot={onTimerSnapshot}
-                />
               </div>
             </section>
 
@@ -494,7 +519,7 @@ function Today() {
           timerSnapshot.active ? `Open focus timer, ${timerSnapshot.time}` : "Open focus timer"
         }
         onClick={() => setMobileTimerOpen(true)}
-        className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] left-4 z-20 flex min-h-12 items-center gap-2 rounded-full border bg-surface px-4 text-sm font-semibold text-primary shadow-lg transition-colors duration-150 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring min-[1100px]:hidden"
+        className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] left-4 z-20 flex min-h-12 items-center gap-2 rounded-full border bg-surface px-4 text-sm font-semibold text-primary shadow-lg transition-colors duration-150 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring min-[768px]:hidden"
       >
         <Timer className="size-4" />
         {timerSnapshot.active ? (

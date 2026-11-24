@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   Check,
   Trash2,
   Timer as TimerIcon,
-  Archive,
   Pencil,
   Pause,
   PlayCircle,
@@ -37,6 +36,8 @@ import {
   useTimer,
   useToggleLog,
   useUpdateHabit,
+  DEFAULT_SETTINGS,
+  type AppSettings,
 } from "@/lib/data";
 import { toast } from "sonner";
 import {
@@ -52,8 +53,13 @@ import {
   type DayState,
 } from "@/lib/today";
 import { HabitFormDialog } from "@/components/habit-form-dialog";
-import { TimerSettingsPanel, type TimerPreferences } from "@/components/timer-settings-panel";
+import {
+  TimerSettingsPanel,
+  type TimerPreferences,
+  type TimerSettingKey,
+} from "@/components/timer-settings-panel";
 import { playSound } from "@/lib/sounds";
+import { playOptionalSound, vibrate } from "@/lib/haptics";
 import type { Database } from "@/integrations/supabase/types";
 
 type Habit = Database["public"]["Tables"]["habits"]["Row"];
@@ -69,6 +75,8 @@ const DEFAULT_TIMER_PREFERENCES: TimerPreferences = {
   breakSound: "none",
   chronometerSound: false,
   completionNotifications: false,
+  hapticsEnabled: false,
+  soundEnabled: false,
 };
 
 export type TimerSnapshot = {
@@ -116,20 +124,19 @@ export function TimerCard({
   const [timerAnnouncement, setTimerAnnouncement] = useState("");
   const [timerPreferences, setTimerPreferences] =
     useState<TimerPreferences>(DEFAULT_TIMER_PREFERENCES);
+  const [localSettings, setLocalSettings] = useState<Partial<AppSettings>>({});
+  const settingSaveTimers = useRef<Partial<Record<TimerSettingKey, number>>>({});
   const [sessionSettings, setSessionSettings] = useState<PomodoroSettingsSnapshot | null>(null);
   const originalTitle = useRef<string | null>(null);
   const completedFocus = useRef(false);
   const [plan, setPlan] = useState<{ target: number; done: number } | null>(null);
+  const timerSettings = { ...DEFAULT_SETTINGS, ...settings, ...localSettings };
 
   const running = sessions.find((session) => !session.ended_at);
   const runningId = running?.id;
   const runningMode = running?.mode;
   const selectableHabits = habits.filter(
-    (habit) =>
-      isTimedHabit(habit) &&
-      !habit.is_paused &&
-      !habit.archived_at &&
-      isHabitScheduledOnDay(habit, dayKey(now)),
+    (habit) => isTimedHabit(habit) && !habit.is_paused && isHabitScheduledOnDay(habit, dayKey(now)),
   );
   const completedSessions = useMemo(
     () => sessions.filter((session) => session.ended_at),
@@ -148,7 +155,7 @@ export function TimerCard({
   const activeFocusEndsAt =
     focusEndsAt ??
     (running?.mode === "pomodoro"
-      ? new Date(running.started_at).getTime() + (settings?.pomodoro_focus_minutes ?? 25) * 60000
+      ? new Date(running.started_at).getTime() + timerSettings.pomodoro_focus_minutes * 60000
       : null);
 
   const focusSeconds = Math.max(
@@ -170,7 +177,7 @@ export function TimerCard({
             ? Math.ceil(pausedRemainingMs / 1000)
             : breakReady
               ? 0
-              : (settings?.pomodoro_focus_minutes ?? 25) * 60
+              : timerSettings.pomodoro_focus_minutes * 60
       : Math.floor(elapsedBeforePauseMs / 1000 + runningMin * 60);
 
   const formattedClock = `${String(Math.floor(displaySeconds / 60)).padStart(2, "0")}:${String(displaySeconds % 60).padStart(2, "0")}`;
@@ -302,6 +309,25 @@ export function TimerCard({
     timerStateRestored,
   ]);
 
+  useEffect(
+    () => () => {
+      for (const timeout of Object.values(settingSaveTimers.current)) {
+        if (timeout !== undefined) window.clearTimeout(timeout);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    setLocalSettings((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(current) as TimerSettingKey[]) {
+        if (settings?.[key] === current[key]) delete next[key];
+      }
+      return next;
+    });
+  }, [settings]);
+
   useEffect(() => {
     if (!running) completedFocus.current = false;
 
@@ -318,9 +344,9 @@ export function TimerCard({
     completedFocus.current = true;
 
     const activeSettings = sessionSettings ?? {
-      pomodoro_focus_minutes: settings?.pomodoro_focus_minutes ?? 25,
-      pomodoro_short_break_minutes: settings?.pomodoro_short_break_minutes ?? 5,
-      pomodoro_long_break_minutes: settings?.pomodoro_long_break_minutes ?? 15,
+      pomodoro_focus_minutes: timerSettings.pomodoro_focus_minutes,
+      pomodoro_short_break_minutes: timerSettings.pomodoro_short_break_minutes,
+      pomodoro_long_break_minutes: timerSettings.pomodoro_long_break_minutes,
       longBreakAfter: timerPreferences.longBreakAfter,
     };
     const nextCycle = cycles + 1;
@@ -356,6 +382,8 @@ export function TimerCard({
           });
 
           playSound(timerPreferences.workSound);
+          vibrate([200, 100, 200]);
+          playOptionalSound("timer-finish");
           if (
             timerPreferences.completionNotifications &&
             typeof Notification !== "undefined" &&
@@ -376,7 +404,9 @@ export function TimerCard({
     running,
     activeFocusEndsAt,
     cycles,
-    settings,
+    timerSettings.pomodoro_focus_minutes,
+    timerSettings.pomodoro_short_break_minutes,
+    timerSettings.pomodoro_long_break_minutes,
     timer,
     plan,
     timerStateRestored,
@@ -435,11 +465,11 @@ export function TimerCard({
 
   const startPomodoro = () => {
     if (!selected) return;
-    const duration = settings?.pomodoro_focus_minutes ?? 25;
+    const duration = timerSettings.pomodoro_focus_minutes;
     setSessionSettings({
       pomodoro_focus_minutes: duration,
-      pomodoro_short_break_minutes: settings?.pomodoro_short_break_minutes ?? 5,
-      pomodoro_long_break_minutes: settings?.pomodoro_long_break_minutes ?? 15,
+      pomodoro_short_break_minutes: timerSettings.pomodoro_short_break_minutes,
+      pomodoro_long_break_minutes: timerSettings.pomodoro_long_break_minutes,
       longBreakAfter: timerPreferences.longBreakAfter,
     });
     completedFocus.current = false;
@@ -506,7 +536,7 @@ export function TimerCard({
     if (!resumeHabitId) return;
     const resumedFocusEndsAt =
       mode === "pomodoro"
-        ? Date.now() + (pausedRemainingMs ?? (settings?.pomodoro_focus_minutes ?? 25) * 60000)
+        ? Date.now() + (pausedRemainingMs ?? timerSettings.pomodoro_focus_minutes * 60000)
         : null;
     timer.mutate(
       { runningId: null, habitId: resumeHabitId, mode },
@@ -553,8 +583,29 @@ export function TimerCard({
     breakReady ||
     (mode === "pomodoro" && Boolean(plan));
 
+  const changeTimerSetting = (key: TimerSettingKey, value: number) => {
+    setLocalSettings((current) => ({ ...current, [key]: value }));
+    const pending = settingSaveTimers.current[key];
+    if (pending !== undefined) window.clearTimeout(pending);
+    settingSaveTimers.current[key] = window.setTimeout(() => {
+      delete settingSaveTimers.current[key];
+      saveSettings.mutate(
+        { [key]: value },
+        {
+          onError: () => {
+            setLocalSettings((current) => {
+              const next = { ...current };
+              delete next[key];
+              return next;
+            });
+          },
+        },
+      );
+    }, 400);
+  };
+
   const focusTotal =
-    (sessionSettings?.pomodoro_focus_minutes ?? settings?.pomodoro_focus_minutes ?? 25) * 60;
+    (sessionSettings?.pomodoro_focus_minutes ?? timerSettings.pomodoro_focus_minutes) * 60;
   const ringProgress =
     mode === "pomodoro"
       ? running && activeFocusEndsAt
@@ -608,9 +659,9 @@ export function TimerCard({
       <TimerSettingsPanel
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        settings={settings}
+        settings={timerSettings}
         preferences={timerPreferences}
-        onSaveSetting={(key, value) => saveSettings.mutate({ [key]: value })}
+        onSaveSetting={changeTimerSetting}
         onChangePreference={changeTimerPreference}
         notificationHint={notificationHint}
       />
@@ -858,19 +909,7 @@ export function SessionList() {
   );
 }
 
-function lastDays(n: number): string[] {
-  const out: string[] = [];
-  const d = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const x = new Date(d);
-    x.setDate(d.getDate() - i);
-    out.push(dayKey(x));
-  }
-  return out;
-}
-
-export type HabitStatusFilter = "all" | "active" | "paused" | "archived";
-export type HabitSortOrder = "oldest" | "newest" | "alphabetical";
+export type HabitStatusFilter = "active" | "paused";
 
 const WEEK_STATE_LABELS: Record<DayState, string> = {
   done: "completed",
@@ -945,20 +984,14 @@ function HabitWeekStrip({
 
 export function HabitList({
   showGrid = true,
-  searchTerm = "",
-  categoryFilter = "All categories",
-  statusFilter = "all",
-  sortOrder = "oldest",
+  statusFilter = "active",
   todayOnly = false,
   selectableTimed = false,
   selectedHabitId = "",
   onSelectHabit,
 }: {
   showGrid?: boolean;
-  searchTerm?: string;
-  categoryFilter?: string;
   statusFilter?: HabitStatusFilter;
-  sortOrder?: HabitSortOrder;
   todayOnly?: boolean;
   selectableTimed?: boolean;
   selectedHabitId?: string;
@@ -987,9 +1020,18 @@ export function HabitList({
   const toggle = useToggleLog();
   const del = useDeleteHabit();
   const updateHabit = useUpdateHabit();
-  const [showArchived, setShowArchived] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
-  const [expandedHabitId, setExpandedHabitId] = useState<string | null>(null);
+  const [deletingHabit, setDeletingHabit] = useState<Habit | null>(null);
+  const [deletingHabitId, setDeletingHabitId] = useState<string | null>(null);
+  const expandedHabitId = useRef<string | null>(null);
+  const [heldCompletedHabits, setHeldCompletedHabits] = useState<Set<string>>(() => new Set());
+  const heldCompletedHabitsRef = useRef(new Set<string>());
+  const reorderTimer = useRef<number | null>(null);
+  const reorderElements = useRef(new Map<string, HTMLLIElement>());
+  const previousCardTops = useRef(new Map<string, number>());
+  const animateNextReorder = useRef(false);
+  const reorderFrame = useRef<number | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const [undoAction, setUndoAction] = useState<{
     habitId: string;
     previousDone?: boolean;
@@ -1006,8 +1048,8 @@ export function HabitList({
     key: number;
   } | null>(null);
   const feedbackKey = useRef(0);
+  const toggleLocks = useRef(new Set<string>());
   const today = dayKey(now);
-  const days = lastDays(119);
   const weekDays = getWeekDayKeys(now);
   const logsByHabitDay = useMemo(
     () => new Map(logs.map((log) => [`${log.habit_id}|${log.day}`, log.count])),
@@ -1045,26 +1087,122 @@ export function HabitList({
     () => new Set(getTodayHabits(habits, today).map((habit) => habit.id)),
     [habits, today],
   );
+
+  const holdCompletedCard = (habitId: string) => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const next = new Set(heldCompletedHabitsRef.current);
+    next.add(habitId);
+    heldCompletedHabitsRef.current = next;
+    setHeldCompletedHabits(next);
+    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current);
+    reorderTimer.current = window.setTimeout(() => {
+      reorderTimer.current = null;
+      if (!heldCompletedHabitsRef.current.size) return;
+      animateNextReorder.current = true;
+      heldCompletedHabitsRef.current = new Set();
+      setHeldCompletedHabits(new Set());
+    }, 700);
+  };
+
+  const cancelHeldCompletion = (habitId: string) => {
+    if (!heldCompletedHabitsRef.current.has(habitId)) return;
+    const next = new Set(heldCompletedHabitsRef.current);
+    next.delete(habitId);
+    heldCompletedHabitsRef.current = next;
+    setHeldCompletedHabits(next);
+    if (!next.size && reorderTimer.current !== null) {
+      window.clearTimeout(reorderTimer.current);
+      reorderTimer.current = null;
+    }
+  };
+
+  const toggleExpandedHabit = (habitId: string) => {
+    const previousId = expandedHabitId.current;
+    const nextId = previousId === habitId ? null : habitId;
+    if (previousId) {
+      const previousCard = reorderElements.current.get(previousId);
+      previousCard?.querySelector("[data-habit-details]")?.setAttribute("data-open", "false");
+      previousCard?.querySelector("[data-habit-details]")?.setAttribute("aria-hidden", "true");
+      previousCard
+        ?.querySelector<HTMLButtonElement>("[data-habit-expander]")
+        ?.setAttribute("aria-expanded", "false");
+    }
+    expandedHabitId.current = nextId;
+    if (nextId) {
+      const nextCard = reorderElements.current.get(nextId);
+      nextCard?.querySelector("[data-habit-details]")?.setAttribute("data-open", "true");
+      nextCard?.querySelector("[data-habit-details]")?.setAttribute("aria-hidden", "false");
+      nextCard
+        ?.querySelector<HTMLButtonElement>("[data-habit-expander]")
+        ?.setAttribute("aria-expanded", "true");
+    }
+  };
+
   const visibleHabits = habits
     .filter((habit) => {
-      const archived = Boolean(habit.archived_at);
       if (todayOnly && !scheduledTodayIds.has(habit.id)) return false;
-      if (statusFilter === "archived" ? !archived : archived && !showArchived) return false;
-      if (statusFilter === "active" && (archived || habit.is_paused)) return false;
-      if (statusFilter === "paused" && (archived || !habit.is_paused)) return false;
-      if (categoryFilter !== "All categories" && habit.category !== categoryFilter) return false;
-      return habit.name.toLowerCase().includes(searchTerm.trim().toLowerCase());
+      if (statusFilter === "active" && habit.is_paused) return false;
+      if (statusFilter === "paused" && !habit.is_paused) return false;
+      return true;
     })
     .sort((left, right) => {
       if (todayOnly) {
-        const leftDone = done.has(`${left.id}|${today}`);
-        const rightDone = done.has(`${right.id}|${today}`);
+        const leftDone = done.has(`${left.id}|${today}`) && !heldCompletedHabits.has(left.id);
+        const rightDone = done.has(`${right.id}|${today}`) && !heldCompletedHabits.has(right.id);
         if (leftDone !== rightDone) return leftDone ? 1 : -1;
       }
-      if (sortOrder === "alphabetical") return left.name.localeCompare(right.name);
-      const chronological = left.created_at.localeCompare(right.created_at);
-      return sortOrder === "newest" ? -chronological : chronological;
+      return left.created_at.localeCompare(right.created_at);
     });
+
+  useLayoutEffect(() => {
+    const currentTops = new Map<string, number>();
+    for (const [id, element] of reorderElements.current) {
+      currentTops.set(id, element.getBoundingClientRect().top);
+    }
+
+    if (animateNextReorder.current) {
+      animateNextReorder.current = false;
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduceMotion) {
+        for (const [id, element] of reorderElements.current) {
+          const previousTop = previousCardTops.current.get(id);
+          const currentTop = currentTops.get(id);
+          if (previousTop === undefined || currentTop === undefined || previousTop === currentTop)
+            continue;
+          element.style.transition = "none";
+          element.style.transform = `translateY(${previousTop - currentTop}px)`;
+        }
+        void listRef.current?.offsetHeight;
+        if (reorderFrame.current !== null) window.cancelAnimationFrame(reorderFrame.current);
+        reorderFrame.current = window.requestAnimationFrame(() => {
+          for (const element of reorderElements.current.values()) {
+            if (!element.style.transform) continue;
+            element.style.transition = "transform 320ms ease-in-out";
+            element.style.transform = "translateY(0)";
+            element.addEventListener(
+              "transitionend",
+              () => {
+                element.style.removeProperty("transition");
+                element.style.removeProperty("transform");
+              },
+              { once: true },
+            );
+          }
+          reorderFrame.current = null;
+        });
+      }
+    }
+
+    previousCardTops.current = currentTops;
+  }, [visibleHabits]);
+
+  useEffect(
+    () => () => {
+      if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current);
+      if (reorderFrame.current !== null) window.cancelAnimationFrame(reorderFrame.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!undoAction) return;
@@ -1120,6 +1258,8 @@ export function HabitList({
   const updateCount = (habitId: string, count: number, nextCount: number, goal: number) => {
     const actionKey = ++feedbackKey.current;
     const completesHabit = count < goal && nextCount >= goal;
+    if (completesHabit) holdCompletedCard(habitId);
+    if (count >= goal && nextCount < goal) cancelHeldCompletion(habitId);
     setUndoAction({
       habitId,
       previousCount: count,
@@ -1143,6 +1283,7 @@ export function HabitList({
           showXpFeedback(habitId, result, count < goal && nextCount >= goal);
         },
         onError: () => {
+          if (completesHabit) cancelHeldCompletion(habitId);
           setUndoAction((current) => (current?.key === actionKey ? null : current));
           setXpFeedback((current) => (current?.habitId === habitId ? null : current));
         },
@@ -1153,6 +1294,7 @@ export function HabitList({
   const undoCompletion = () => {
     if (!undoAction) return;
     const action = undoAction;
+    cancelHeldCompletion(action.habitId);
     setUndoAction(null);
     toggle.mutate({
       habit_id: action.habitId,
@@ -1185,7 +1327,7 @@ export function HabitList({
         }}
       />
     );
-  if (!habits.length)
+  if (!habits.length && statusFilter === "active")
     return (
       <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
         No habits yet — add your first one.
@@ -1194,43 +1336,19 @@ export function HabitList({
 
   if (!visibleHabits.length)
     return (
-      <div className="space-y-3">
-        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-          {statusFilter === "archived"
-            ? "No archived habits yet."
-            : searchTerm || categoryFilter !== "All categories"
-              ? "No habits match these filters."
-              : statusFilter === "paused"
-                ? "No paused habits."
-                : "No habits to show. Add one or view archived habits."}
-        </p>
-        {showGrid && statusFilter !== "archived" && (
-          <button
-            type="button"
-            onClick={() => setShowArchived((value) => !value)}
-            className="w-full text-center text-sm text-primary"
-          >
-            {showArchived ? "Hide archived habits" : "Show archived habits"}
-          </button>
-        )}
-      </div>
+      <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+        {statusFilter === "paused"
+          ? "No paused habits"
+          : "No active habits yet. Add one when you’re ready."}
+      </p>
     );
 
   return (
     <>
-      {showGrid && statusFilter !== "archived" && (
-        <button
-          type="button"
-          onClick={() => setShowArchived((value) => !value)}
-          className="mb-3 min-h-9 rounded-xl px-2 text-sm text-primary hover:bg-primary/5"
-        >
-          {showArchived ? "Hide archived habits" : "Show archived habits"}
-        </button>
-      )}
-      <ul className={cn("grid gap-4", showGrid && "lg:grid-cols-2")}>
+      <ul ref={listRef} className={cn("grid gap-4", showGrid && "lg:grid-cols-2")}>
         {visibleHabits.map((h) => {
-          const isArchived = Boolean(h.archived_at);
-          const inactive = isArchived || h.is_paused || !isHabitScheduledOnDay(h, today);
+          const inactive = h.is_paused || !isHabitScheduledOnDay(h, today);
+          const isFinished = Boolean(h.end_date && today > h.end_date);
           const isDone = done.has(`${h.id}|${today}`);
           const minutes = timeByHabit.get(`${h.id}|${today}`) ?? 0;
           const goal = h.daily_goal_minutes ?? 0;
@@ -1240,10 +1358,14 @@ export function HabitList({
           const canSelect = selectableTimed && isTimedHabit(h) && !inactive;
           const canExpand = isTimedHabit(h);
           const isSelected = selectedHabitId === h.id;
-          const isExpanded = canExpand && expandedHabitId === h.id;
+          const isExpanded = canExpand && expandedHabitId.current === h.id;
           return (
             <li
               key={h.id}
+              ref={(element) => {
+                if (element) reorderElements.current.set(h.id, element);
+                else reorderElements.current.delete(h.id);
+              }}
               onClick={(event) => {
                 if (
                   !todayOnly ||
@@ -1251,12 +1373,13 @@ export function HabitList({
                   (event.target instanceof HTMLElement && event.target.closest("button"))
                 )
                   return;
-                setExpandedHabitId(isExpanded ? null : h.id);
+                toggleExpandedHabit(h.id);
               }}
               className={cn(
-                "relative min-h-[88px] rounded-2xl border bg-surface p-4 shadow-[var(--shadow-card)] transition-shadow duration-150 hover:shadow-md",
+                "relative min-h-[88px] rounded-2xl border bg-surface p-4 shadow-[var(--shadow-card)] transition-[transform,opacity] duration-200 hover:shadow-md",
                 todayOnly && canExpand && "cursor-pointer",
                 isSelected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                deletingHabitId === h.id && "pointer-events-none scale-[0.98] opacity-0",
               )}
             >
               {xpFeedback?.habitId === h.id && (
@@ -1281,9 +1404,10 @@ export function HabitList({
                     {canExpand ? (
                       <button
                         type="button"
+                        data-habit-expander
                         aria-expanded={isExpanded}
                         aria-controls={`habit-details-${h.id}`}
-                        onClick={() => setExpandedHabitId(isExpanded ? null : h.id)}
+                        onClick={() => toggleExpandedHabit(h.id)}
                         className="flex min-h-6 w-full items-center justify-between gap-2 rounded-md text-left"
                       >
                         <span
@@ -1313,18 +1437,16 @@ export function HabitList({
                       </span>
                     )}
                     <span className="block text-[13px] font-medium text-[var(--text-secondary)]">
-                      {h.category} ·{" "}
-                      {isArchived
-                        ? "Archived"
-                        : h.is_paused
-                          ? "Paused"
-                          : `${streak.current} day streak`}
+                      {h.category} · {h.is_paused ? "Paused" : `${streak.current} day streak`}
                     </span>
-                    {!isArchived && (
-                      <div className="mt-2">
-                        <HabitWeekStrip habitName={h.name} dayKeys={weekDays} states={weekStrip} />
-                      </div>
+                    {isFinished && (
+                      <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        Finished
+                      </span>
                     )}
+                    <div className="mt-2">
+                      <HabitWeekStrip habitName={h.name} dayKeys={weekDays} states={weekStrip} />
+                    </div>
                   </div>
                 </div>
                 <div
@@ -1343,35 +1465,27 @@ export function HabitList({
                       >
                         <Pencil className="size-4" />
                       </button>
-                      {!isArchived && (
-                        <button
-                          type="button"
-                          aria-label={h.is_paused ? `Resume ${h.name}` : `Pause ${h.name}`}
-                          onClick={() =>
-                            updateHabit.mutate({ id: h.id, updates: { is_paused: !h.is_paused } })
-                          }
-                          className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
-                        >
-                          {h.is_paused ? (
-                            <PlayCircle className="size-4" />
-                          ) : (
-                            <Pause className="size-4" />
-                          )}
-                        </button>
-                      )}
                       <button
                         type="button"
-                        aria-label={isArchived ? `Restore ${h.name}` : `Archive ${h.name}`}
-                        onClick={() => {
-                          if (isArchived) {
-                            updateHabit.mutate({ id: h.id, updates: { archived_at: null } });
-                          } else if (confirm("Archive this habit? Its history will be kept.")) {
-                            del.mutate(h.id);
-                          }
-                        }}
+                        aria-label={h.is_paused ? `Resume ${h.name}` : `Pause ${h.name}`}
+                        onClick={() =>
+                          updateHabit.mutate({ id: h.id, updates: { is_paused: !h.is_paused } })
+                        }
+                        className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+                      >
+                        {h.is_paused ? (
+                          <PlayCircle className="size-4" />
+                        ) : (
+                          <Pause className="size-4" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${h.name}`}
+                        onClick={() => setDeletingHabit(h)}
                         className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-destructive"
                       >
-                        <Archive className="size-4" />
+                        <Trash2 className="size-4" />
                       </button>
                     </>
                   )}
@@ -1425,10 +1539,17 @@ export function HabitList({
                       aria-label={`Mark ${h.name} ${isDone ? "not done" : "done"}`}
                       aria-pressed={isDone}
                       disabled={
-                        (toggle.isPending && toggle.variables?.habit_id === h.id) || inactive
+                        (toggle.isPending && toggle.variables?.habit_id === h.id) ||
+                        inactive ||
+                        toggleLocks.current.has(h.id)
                       }
                       onClick={() => {
-                        if (!isDone && typeof navigator !== "undefined") navigator.vibrate?.(15);
+                        if (toggleLocks.current.has(h.id)) return;
+                        toggleLocks.current.add(h.id);
+                        if (isDone) cancelHeldCompletion(h.id);
+                        else holdCompletedCard(h.id);
+                        vibrate(isDone ? 10 : 15);
+                        if (!isDone) playOptionalSound("habit-complete");
                         const actionKey = ++feedbackKey.current;
                         setUndoAction({
                           habitId: h.id,
@@ -1447,8 +1568,13 @@ export function HabitList({
                             completed_at: completionTimeByHabitDay.get(`${h.id}|${today}`) ?? null,
                           },
                           {
-                            onSuccess: (result) => showXpFeedback(h.id, result, !isDone),
+                            onSuccess: (result) => {
+                              toggleLocks.current.delete(h.id);
+                              showXpFeedback(h.id, result, !isDone);
+                            },
                             onError: () => {
+                              toggleLocks.current.delete(h.id);
+                              if (!isDone) cancelHeldCompletion(h.id);
                               setUndoAction((current) =>
                                 current?.key === actionKey ? null : current,
                               );
@@ -1479,78 +1605,54 @@ export function HabitList({
               <div
                 id={`habit-details-${h.id}`}
                 aria-hidden={!isExpanded}
-                className={cn(
-                  "overflow-hidden transition-[max-height,opacity,margin,padding,border-width] duration-[180ms] motion-reduce:transition-none",
-                  isExpanded
-                    ? "mt-3 max-h-[500px] border-t border-border/70 pt-3 opacity-100"
-                    : "m-0 max-h-0 border-0 p-0 opacity-0",
-                )}
+                data-habit-details
+                data-open={isExpanded}
+                className="habit-details-motion"
               >
-                {h.description && (
-                  <p className="mb-3 text-sm text-[var(--text-secondary)]">{h.description}</p>
-                )}
-                {isTimedHabit(h) && !isArchived && goal > 0 && (
-                  <div className="mb-3">
-                    <div className="mb-1.5 flex justify-between text-sm text-[var(--text-secondary)]">
-                      <span>Today&apos;s focus goal</span>
-                      <span>
-                        {formatMinutes(minutes)} / {formatMinutes(goal)}
-                      </span>
-                    </div>
-                    <div
-                      role="progressbar"
-                      aria-label={`${h.name} time goal`}
-                      aria-valuenow={Math.min(100, Math.round((minutes / goal) * 100))}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      className="h-2 overflow-hidden rounded-full bg-cell"
-                    >
-                      <div
-                        className="h-full rounded-full bg-primary transition-[width] duration-200"
-                        style={{ width: `${Math.min(100, (minutes / goal) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-                {canSelect && (
-                  <button
-                    type="button"
-                    tabIndex={isExpanded ? 0 : -1}
-                    aria-pressed={isSelected}
-                    onClick={() => onSelectHabit?.(isSelected ? "" : h.id)}
-                    className="min-h-11 rounded-xl bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/15"
-                  >
-                    {isSelected ? "Selected for focus" : "Select for focus"}
-                  </button>
-                )}
-              </div>
-              {showGrid && (
-                <div className="mt-4">
-                  <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium">90-day progress</span>
-                    <span>
-                      {days.slice(-90).filter((day) => done.has(`${h.id}|${day}`)).length}/90 days
-                    </span>
-                  </div>
-                  <div
-                    role="img"
-                    aria-label={`${h.name}: 90-day completion history in chronological order, oldest first`}
-                    className="grid w-full grid-cols-[repeat(30,minmax(0,1fr))] gap-1"
-                  >
-                    {days.slice(-90).map((d) => (
-                      <span
-                        key={d}
-                        title={d}
-                        aria-label={`${h.name} ${d}${done.has(`${h.id}|${d}`) ? " completed" : ""}`}
-                        className={cn(
-                          "aspect-square min-w-0 rounded-[3px] transition-colors",
-                          done.has(`${h.id}|${d}`) ? colorBg[h.color] : "bg-cell/70",
-                        )}
-                      />
-                    ))}
+                <div className="min-h-0 overflow-hidden">
+                  <div className="border-t border-border/70 pt-3">
+                    {h.description && (
+                      <p className="mb-3 text-sm text-[var(--text-secondary)]">{h.description}</p>
+                    )}
+                    {isTimedHabit(h) && goal > 0 && (
+                      <div className="mb-3">
+                        <div className="mb-1.5 flex justify-between text-sm text-[var(--text-secondary)]">
+                          <span>Today&apos;s focus goal</span>
+                          <span>
+                            {formatMinutes(minutes)} / {formatMinutes(goal)}
+                          </span>
+                        </div>
+                        <div
+                          role="progressbar"
+                          aria-label={`${h.name} time goal`}
+                          aria-valuenow={Math.min(100, Math.round((minutes / goal) * 100))}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          className="h-2 overflow-hidden rounded-full bg-cell"
+                        >
+                          <div
+                            className="h-full origin-left scale-x-0 rounded-full bg-primary transition-transform duration-200"
+                            style={{
+                              transform: `scaleX(${Math.min(100, (minutes / goal) * 100) / 100})`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {canSelect && (
+                      <button
+                        type="button"
+                        tabIndex={isExpanded ? 0 : -1}
+                        aria-pressed={isSelected}
+                        onClick={() => onSelectHabit?.(isSelected ? "" : h.id)}
+                        className="min-h-11 rounded-xl bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/15"
+                      >
+                        {isSelected ? "Selected for focus" : "Select for focus"}
+                      </button>
+                    )}
                   </div>
                 </div>
-              )}
+              </div>
             </li>
           );
         })}
@@ -1579,6 +1681,49 @@ export function HabitList({
           if (!open) setEditingHabit(null);
         }}
       />
+      <Dialog
+        open={Boolean(deletingHabit)}
+        onOpenChange={(open) => {
+          if (!open && !del.isPending) setDeletingHabit(null);
+        }}
+      >
+        <DialogContent className="max-w-sm sm:rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>Delete this habit?</DialogTitle>
+            <DialogDescription>
+              Its history will be removed. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-row gap-2 sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={del.isPending}
+              onClick={() => setDeletingHabit(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={del.isPending || !deletingHabit}
+              onClick={() => {
+                if (!deletingHabit) return;
+                setDeletingHabitId(deletingHabit.id);
+                del.mutate(deletingHabit.id, {
+                  onSuccess: () => {
+                    setDeletingHabitId(null);
+                    setDeletingHabit(null);
+                  },
+                  onError: () => setDeletingHabitId(null),
+                });
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

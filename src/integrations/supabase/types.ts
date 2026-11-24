@@ -202,7 +202,6 @@ export type Database = {
       };
       habits: {
         Row: {
-          archived_at: string | null;
           category: string;
           color: string;
           created_at: string;
@@ -220,12 +219,13 @@ export type Database = {
           reminder_time: string;
           schedule_days: number[];
           skipped_dates: string[];
+          start_date: string | null;
+          end_date: string | null;
           streak_freezes: number;
           tracking_type: string;
           user_id: string;
         };
         Insert: {
-          archived_at?: string | null;
           category?: string;
           color?: string;
           created_at?: string;
@@ -243,12 +243,13 @@ export type Database = {
           reminder_time?: string;
           schedule_days?: number[];
           skipped_dates?: string[];
+          start_date?: string | null;
+          end_date?: string | null;
           streak_freezes?: number;
           tracking_type?: string;
           user_id?: string;
         };
         Update: {
-          archived_at?: string | null;
           category?: string;
           color?: string;
           created_at?: string;
@@ -266,6 +267,8 @@ export type Database = {
           reminder_time?: string;
           schedule_days?: number[];
           skipped_dates?: string[];
+          start_date?: string | null;
+          end_date?: string | null;
           streak_freezes?: number;
           tracking_type?: string;
           user_id?: string;

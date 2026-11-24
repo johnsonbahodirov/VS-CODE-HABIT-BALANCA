@@ -20,6 +20,26 @@ import type { Database } from "@/integrations/supabase/types";
 
 type Habit = Database["public"]["Tables"]["habits"]["Row"];
 type HabitType = "yesno" | "timed";
+type DurationMode = "none" | "days" | "dates";
+
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateAfterDays(startDate: string, days: number): string {
+  const date = new Date(`${startDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function inclusiveDaysBetween(startDate: string, endDate: string): number {
+  const start = new Date(`${startDate}T00:00:00Z`).getTime();
+  const end = new Date(`${endDate}T00:00:00Z`).getTime();
+  return Math.floor((end - start) / 86400000) + 1;
+}
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const CATEGORY_ICON_KEYS: Record<string, keyof typeof HABIT_ICONS> = {
@@ -60,6 +80,10 @@ export function HabitFormDialog({
   const [icon, setIcon] = useState("dumbbell");
   const [color, setColor] = useState<string>("#219B70");
   const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [durationMode, setDurationMode] = useState<DurationMode>("none");
+  const [startDate, setStartDate] = useState(() => localDateKey());
+  const [endDate, setEndDate] = useState("");
+  const [durationDays, setDurationDays] = useState("30");
   const [type, setType] = useState<HabitType>("yesno");
   const [goalHours, setGoalHours] = useState("0");
   const [goalMinutes, setGoalMinutes] = useState("30");
@@ -69,6 +93,7 @@ export function HabitFormDialog({
   const [reminderTime, setReminderTime] = useState("09:00");
   const [nameError, setNameError] = useState("");
   const [goalError, setGoalError] = useState("");
+  const [lengthError, setLengthError] = useState("");
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [iconScreenOpen, setIconScreenOpen] = useState(false);
   const dialogContentRef = useRef<HTMLDivElement>(null);
@@ -110,6 +135,19 @@ export function HabitFormDialog({
       setIcon(habit.icon);
       setColor(habit.color);
       setDays(habit.schedule_days);
+      setStartDate(habit.start_date ?? habit.created_at.slice(0, 10));
+      setEndDate(habit.end_date ?? "");
+      setDurationMode(habit.end_date ? "dates" : "none");
+      setDurationDays(
+        habit.end_date
+          ? String(
+              inclusiveDaysBetween(
+                habit.start_date ?? habit.created_at.slice(0, 10),
+                habit.end_date,
+              ),
+            )
+          : "30",
+      );
       setType(isTimedHabit(habit) ? "timed" : "yesno");
       setGoalHours(String(Math.floor(habit.daily_goal_minutes / 60)));
       setGoalMinutes(String(habit.daily_goal_minutes % 60));
@@ -128,6 +166,10 @@ export function HabitFormDialog({
       setIcon("dumbbell");
       setColor("#219B70");
       setDays([0, 1, 2, 3, 4, 5, 6]);
+      setDurationMode("none");
+      setStartDate(localDateKey());
+      setEndDate("");
+      setDurationDays("30");
       setType("yesno");
       setGoalHours("0");
       setGoalMinutes("30");
@@ -137,6 +179,7 @@ export function HabitFormDialog({
       setReminderTime("09:00");
       setNameError("");
       setGoalError("");
+      setLengthError("");
       setTourStep(localStorage.getItem("balance-habit-form-tour-seen") === "true" ? null : 0);
     }
   }, [open, habit]);
@@ -188,9 +231,18 @@ export function HabitFormDialog({
             : totalGoalMinutes > 1440
               ? "Daily focus goal cannot exceed 24 hours."
               : "";
+    const daysValue = Number(durationDays);
+    const nextLengthError = !startDate
+      ? "Choose a start date."
+      : durationMode === "days" && (!Number.isInteger(daysValue) || daysValue < 1 || !endDate)
+        ? "Enter a whole number of days, at least 1."
+        : durationMode !== "none" && (!endDate || endDate < startDate)
+          ? "End date cannot be before the start date."
+          : "";
     setNameError(nextNameError);
     setGoalError(nextGoalError);
-    if (nextNameError || nextGoalError) return;
+    setLengthError(nextLengthError);
+    if (nextNameError || nextGoalError || nextLengthError) return;
     submitLockRef.current = true;
 
     const scheduleDays = days.length ? days : [0, 1, 2, 3, 4, 5, 6];
@@ -205,6 +257,8 @@ export function HabitFormDialog({
       difficulty,
       reminder_enabled: reminderEnabled,
       reminder_time: reminderTime,
+      start_date: startDate,
+      end_date: durationMode === "none" ? null : endDate,
       habit_type: type,
       tracking_type: habit?.tracking_type === "count" ? ("count" as const) : ("yes_no" as const),
       daily_goal_count: habit?.tracking_type === "count" ? countGoal : 1,
@@ -399,6 +453,122 @@ export function HabitFormDialog({
                 {days.length === 0 && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     No days selected means every day.
+                  </p>
+                )}
+              </fieldset>
+
+              <fieldset className="space-y-3 rounded-2xl border p-3">
+                <legend className="px-1 text-xs font-medium text-muted-foreground">
+                  How long?
+                </legend>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      ["none", "No end date"],
+                      ["days", "Number of days"],
+                      ["dates", "Pick dates"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={durationMode === value}
+                      onClick={() => {
+                        setDurationMode(value);
+                        setLengthError("");
+                        if (value === "days" && startDate) {
+                          const count = Number(durationDays);
+                          if (Number.isInteger(count) && count >= 1) {
+                            setEndDate(dateAfterDays(startDate, count));
+                          }
+                        }
+                      }}
+                      className={cn(
+                        "min-h-10 rounded-xl px-2 text-xs font-semibold sm:text-sm",
+                        durationMode === value
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-cell text-muted-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="block text-xs font-medium text-muted-foreground">
+                  Start date
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setStartDate(next);
+                      setLengthError("");
+                      const count = Number(durationDays);
+                      if (
+                        durationMode === "days" &&
+                        next &&
+                        Number.isInteger(count) &&
+                        count >= 1
+                      ) {
+                        setEndDate(dateAfterDays(next, count));
+                      }
+                    }}
+                    aria-label="Habit start date"
+                    className="mt-1 h-10 rounded-xl bg-cell"
+                  />
+                </label>
+                {durationMode === "days" && (
+                  <label className="block text-xs font-medium text-muted-foreground">
+                    Number of days
+                    <Input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={durationDays}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setDurationDays(next);
+                        setLengthError("");
+                        const count = Number(next);
+                        if (startDate && Number.isInteger(count) && count >= 1) {
+                          setEndDate(dateAfterDays(startDate, count));
+                        }
+                      }}
+                      aria-label="Number of days"
+                      aria-invalid={Boolean(lengthError)}
+                      className="mt-1 h-10 rounded-xl bg-cell"
+                    />
+                  </label>
+                )}
+                {durationMode !== "none" && (
+                  <label className="block text-xs font-medium text-muted-foreground">
+                    End date
+                    <Input
+                      type="date"
+                      min={startDate}
+                      value={endDate}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setEndDate(next);
+                        setLengthError("");
+                        if (startDate && next && next >= startDate) {
+                          setDurationDays(String(inclusiveDaysBetween(startDate, next)));
+                        }
+                      }}
+                      aria-label="Habit end date"
+                      aria-invalid={Boolean(lengthError)}
+                      className="mt-1 h-10 rounded-xl bg-cell"
+                    />
+                    {durationMode === "days" && endDate && (
+                      <span className="mt-1 block text-muted-foreground">
+                        Ends {new Date(`${endDate}T12:00:00`).toLocaleDateString()}
+                      </span>
+                    )}
+                  </label>
+                )}
+                {lengthError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {lengthError}
                   </p>
                 )}
               </fieldset>

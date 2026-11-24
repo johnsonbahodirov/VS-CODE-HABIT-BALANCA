@@ -620,7 +620,7 @@ export function AchievementGrid({
             return (
               <article
                 key={achievement.key}
-                className={`relative flex flex-col justify-between rounded-3xl border p-4 transition-all ${
+                className={`relative flex flex-col justify-between rounded-3xl border p-4 transition-[transform,opacity] duration-200 ${
                   isUnlocked ? "bg-surface shadow-sm" : "bg-surface/50 opacity-90 hover:opacity-100"
                 } ${tierCardBorder[achievement.tier] ?? "border-border"}`}
               >

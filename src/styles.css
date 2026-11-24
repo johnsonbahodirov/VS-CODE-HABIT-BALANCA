@@ -157,17 +157,30 @@
 
 @keyframes route-enter {
   from {
-    transform: translateY(7px);
     opacity: 0;
   }
   to {
-    transform: translateY(0);
     opacity: 1;
   }
 }
 
 .route-enter {
-  animation: route-enter 95ms ease-out both;
+  animation: route-enter 150ms ease-out both;
+}
+
+button,
+a,
+[role="button"] {
+  transition-property: transform, opacity;
+  transition-duration: 140ms;
+  transition-timing-function: ease-out;
+}
+
+.app-route-content article,
+.app-route-content .bg-surface {
+  transition-property: transform, opacity;
+  transition-duration: 220ms;
+  transition-timing-function: ease-out;
 }
 
 @keyframes xp-float {
@@ -236,27 +249,24 @@
 }
 
 ::view-transition-old(app-content) {
-  animation: 65ms ease-out both route-view-old;
+  animation: 150ms ease-out both route-view-old;
 }
 
 ::view-transition-new(app-content) {
-  animation: 95ms ease-out both route-view-new;
+  animation: 150ms ease-out both route-view-new;
 }
 
 @keyframes route-view-old {
   to {
-    transform: translateY(-3px);
     opacity: 0;
   }
 }
 
 @keyframes route-view-new {
   from {
-    transform: translateY(8px);
     opacity: 0;
   }
   to {
-    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -329,35 +339,34 @@
   gap: 0.75rem;
 }
 
+.habit-details-motion {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    grid-template-rows 200ms ease-out,
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+}
+
+.habit-details-motion[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (min-width: 1100px) {
   .today-widget-panel {
     position: sticky;
-    top: 1.25rem;
+    top: 1rem;
   }
 }
 
 @media (min-width: 768px) and (max-width: 1099px) {
   .today-widget-panel {
-    position: fixed;
-    inset-block: 1rem;
-    inset-inline-end: 1rem;
-    z-index: 40;
-    width: min(20.625rem, calc(100vw - 5rem));
-    max-height: calc(100dvh - 2rem);
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 1.5rem;
-    background: var(--background);
-    padding: 1rem;
-    box-shadow: 0 0.75rem 2.5rem rgb(20 38 28 / 0.18);
-    transform: translateX(calc(100% + 1.5rem));
-    transition: transform 230ms ease;
-    pointer-events: none;
-  }
-
-  .today-widget-panel[data-mobile-open="true"] {
-    transform: translateX(0);
-    pointer-events: auto;
+    position: sticky;
+    top: 1rem;
   }
 }
 
@@ -390,8 +399,27 @@ body:has(.today-widget-panel[data-mobile-open="true"]) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  button,
+  a,
+  [role="button"],
+  .app-route-content article,
+  .app-route-content .bg-surface {
+    transition-duration: 0.01ms !important;
+  }
+
+  .route-enter,
+  ::view-transition-old(app-content),
+  ::view-transition-new(app-content) {
+    animation-duration: 0.01ms !important;
+  }
+
   .today-widget-panel {
     transition-duration: 0.01ms !important;
+  }
+
+  .habit-details-motion {
+    transition: none;
+    transform: none;
   }
 }
 

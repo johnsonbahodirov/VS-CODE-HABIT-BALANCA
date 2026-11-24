@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
@@ -9,12 +8,12 @@ import {
 } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { SOUND_OPTIONS } from "@/lib/sounds";
+import { supportsVibration } from "@/lib/haptics";
 import type { AppSettings } from "@/lib/data";
 
-type SettingKey =
+export type TimerSettingKey =
   "pomodoro_focus_minutes" | "pomodoro_short_break_minutes" | "pomodoro_long_break_minutes";
 
 export type TimerPreferences = {
@@ -24,6 +23,8 @@ export type TimerPreferences = {
   breakSound: string;
   chronometerSound: boolean;
   completionNotifications: boolean;
+  hapticsEnabled: boolean;
+  soundEnabled: boolean;
 };
 
 export function TimerSettingsPanel({
@@ -39,7 +40,7 @@ export function TimerSettingsPanel({
   onOpenChange: (open: boolean) => void;
   settings: AppSettings | undefined;
   preferences: TimerPreferences;
-  onSaveSetting: (key: SettingKey, value: number) => void;
+  onSaveSetting: (key: TimerSettingKey, value: number) => void;
   onChangePreference: <K extends keyof TimerPreferences>(
     key: K,
     value: TimerPreferences[K],
@@ -101,6 +102,18 @@ export function TimerSettingsPanel({
         checked={preferences.chronometerSound}
         onCheckedChange={(value) => onChangePreference("chronometerSound", value)}
       />
+      {supportsVibration() && (
+        <ToggleRow
+          label="Vibration"
+          checked={preferences.hapticsEnabled}
+          onCheckedChange={(value) => onChangePreference("hapticsEnabled", value)}
+        />
+      )}
+      <ToggleRow
+        label="Sound"
+        checked={preferences.soundEnabled}
+        onCheckedChange={(value) => onChangePreference("soundEnabled", value)}
+      />
       <div>
         <ToggleRow
           label="Completion notifications"
@@ -152,17 +165,47 @@ function MinuteRow({
   max: number;
   onChange: (value: number) => void;
 }) {
+  const choices = [15, 25, 30, 45, 50];
   return (
-    <div className="flex items-center justify-between gap-3 border-b py-2.5 last:border-0">
-      <span className="text-sm font-medium">{label}</span>
-      <NumberWheel
-        value={value}
-        min={min}
-        max={max}
-        suffix="min"
-        onChange={onChange}
-        ariaLabel={label}
-      />
+    <div className="border-b py-2.5 last:border-0">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium">{label}</span>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Custom
+          <input
+            type="number"
+            min={min}
+            max={max}
+            value={value}
+            onChange={(event) => {
+              const next = event.currentTarget.valueAsNumber;
+              if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+            }}
+            aria-label={`${label} custom minutes`}
+            className="h-9 w-16 rounded-lg border bg-cell px-2 text-center text-sm text-foreground"
+          />
+          min
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {choices
+          .filter((choice) => choice >= min && choice <= max)
+          .map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              aria-pressed={value === choice}
+              onClick={() => onChange(choice)}
+              className={`min-h-9 rounded-lg px-3 text-sm transition-colors duration-150 ${
+                value === choice
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-cell text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {choice}
+            </button>
+          ))}
+      </div>
     </div>
   );
 }
@@ -185,133 +228,22 @@ function NumberRow({
   return (
     <div className="flex items-center justify-between gap-3 border-b py-2.5 last:border-0">
       <span className="text-sm font-medium">{label}</span>
-      <NumberWheel
-        value={value}
-        min={min}
-        max={max}
-        suffix={suffix}
-        onChange={onChange}
-        ariaLabel={label}
-      />
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(event) => {
+            const next = event.currentTarget.valueAsNumber;
+            if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+          }}
+          aria-label={label}
+          className="h-9 w-16 rounded-lg border bg-cell px-2 text-center text-sm text-foreground"
+        />
+        {suffix}
+      </label>
     </div>
-  );
-}
-
-function NumberWheel({
-  value,
-  min,
-  max,
-  suffix,
-  onChange,
-  ariaLabel,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  suffix: string;
-  onChange: (value: number) => void;
-  ariaLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const wheelRef = useRef<HTMLDivElement>(null);
-  const scrollTimer = useRef<number | null>(null);
-  const values = useMemo(() => {
-    const next = Array.from({ length: max - min + 1 }, (_, index) => min + index);
-    if (!next.includes(value)) next.push(value);
-    return next.sort((left, right) => left - right);
-  }, [max, min, value]);
-
-  useEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(() => {
-      const index = values.indexOf(value);
-      wheelRef.current?.scrollTo({ top: Math.max(0, index * 36), behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [open, value, values]);
-
-  const snapToScroll = () => {
-    if (scrollTimer.current) window.clearTimeout(scrollTimer.current);
-    scrollTimer.current = window.setTimeout(() => {
-      const wheel = wheelRef.current;
-      if (!wheel) return;
-      const index = Math.max(0, Math.min(values.length - 1, Math.round(wheel.scrollTop / 36)));
-      wheel.scrollTo({ top: index * 36, behavior: "smooth" });
-      const nextValue = values[index];
-      if (nextValue !== undefined && nextValue !== value) onChange(nextValue);
-    }, 90);
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      setOpen(false);
-      return;
-    }
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-    event.preventDefault();
-    const index = values.indexOf(value);
-    const nextIndex =
-      event.key === "ArrowUp" ? Math.max(0, index - 1) : Math.min(values.length - 1, index + 1);
-    const nextValue = values[nextIndex];
-    if (nextValue === undefined) return;
-    onChange(nextValue);
-    wheelRef.current?.scrollTo({ top: nextIndex * 36, behavior: "smooth" });
-  };
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${ariaLabel}: ${value} ${suffix}`}
-          className="h-9 min-w-28 rounded-xl border bg-cell px-3 text-center text-sm font-medium"
-        >
-          {value} {suffix}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={8}
-        onKeyDown={handleKeyDown}
-        className="z-[70] w-32 rounded-2xl border bg-surface p-2 shadow-lg"
-      >
-        <div className="relative">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute left-1 right-1 top-[72px] h-9 rounded-xl bg-primary/10 ring-1 ring-primary/20"
-          />
-          <div
-            ref={wheelRef}
-            role="listbox"
-            aria-label={ariaLabel}
-            tabIndex={0}
-            onScroll={snapToScroll}
-            className="relative h-[180px] overflow-y-auto overscroll-contain py-[72px] text-center scroll-smooth [scroll-snap-type:y_mandatory] [scrollbar-width:none] motion-reduce:scroll-auto"
-          >
-            {values.map((item, index) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={item === value}
-                key={item}
-                onClick={() => {
-                  onChange(item);
-                  wheelRef.current?.scrollTo({ top: index * 36, behavior: "smooth" });
-                }}
-                className={`block h-9 w-full scroll-mt-0 snap-center text-sm transition-all motion-reduce:transition-none ${
-                  item === value
-                    ? "scale-100 font-bold text-primary"
-                    : "scale-90 text-muted-foreground/70"
-                }`}
-              >
-                {item} {suffix}
-              </button>
-            ))}
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -332,7 +264,7 @@ export function RoundStepperButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#DDEBE1] text-[#16865F] transition-all hover:bg-[#CFE3D5] active:scale-95 disabled:cursor-not-allowed disabled:bg-[#EDF3EF] disabled:text-[#16865F]/50 motion-reduce:transition-none"
+      className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#DDEBE1] text-[#16865F] transition-[transform,background-color] duration-150 hover:bg-[#CFE3D5] active:scale-95 disabled:cursor-not-allowed disabled:bg-[#EDF3EF] disabled:text-[#16865F]/50 motion-reduce:transition-none"
     >
       {children}
     </button>

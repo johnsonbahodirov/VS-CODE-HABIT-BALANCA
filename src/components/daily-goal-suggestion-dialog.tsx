@@ -76,7 +76,7 @@ export function DailyGoalSuggestionDialog() {
     if (askedToday === today) return;
 
     const candidate = habits.find((habit) => {
-      if (habit.is_paused || habit.archived_at) return false;
+      if (habit.is_paused) return false;
       const lastAsked = localStorage.getItem(`balance_habit_suggestion_last_${habit.id}`);
       if (lastAsked) {
         const elapsed = Math.round(

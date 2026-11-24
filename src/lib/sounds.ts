@@ -7,6 +7,9 @@ export type SoundOption = {
 export const SOUND_OPTIONS: SoundOption[] = [
   { id: "none", label: "None", filePath: null },
   { id: "default-beep", label: "Default beep", filePath: null },
+  { id: "habit-complete", label: "Habit complete", filePath: "/sounds/habit-complete.mp3" },
+  { id: "all-done", label: "All done", filePath: "/sounds/all-done.mp3" },
+  { id: "timer-finish", label: "Timer finished", filePath: "/sounds/timer-finish.mp3" },
 ];
 
 export function playSound(soundId: string): void {
@@ -14,9 +17,7 @@ export function playSound(soundId: string): void {
   if (!sound || sound.id === "none") return;
   if (sound.filePath) {
     const audio = new Audio(sound.filePath);
-    void audio.play().catch((error: unknown) => {
-      console.error("Could not play the selected timer sound.", error);
-    });
+    void audio.play().catch(() => {});
     return;
   }
   if (typeof window === "undefined") return;

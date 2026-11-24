@@ -3,8 +3,9 @@ import { isHabitScheduledOnDay } from "@/lib/gamification";
 
 export type TodayHabit = {
   id: string;
-  archived_at?: string | null;
   created_at?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
   daily_goal_minutes?: number | null;
   frequency?: string | null;
   habit_type?: string | null;
@@ -48,9 +49,7 @@ export function isTimedHabit(habit: TodayHabit): boolean {
 }
 
 export function getTodayHabits<T extends TodayHabit>(habits: T[], day: string): T[] {
-  return habits.filter(
-    (habit) => !habit.is_paused && !habit.archived_at && isHabitScheduledOnDay(habit, day),
-  );
+  return habits.filter((habit) => !habit.is_paused && isHabitScheduledOnDay(habit, day));
 }
 
 export function getTodayFocusPlan(

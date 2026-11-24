@@ -16,6 +16,8 @@ type HabitReminderRow = {
   reminder_time: string;
   frequency: string;
   schedule_days: number[];
+  start_date: string | null;
+  end_date: string | null;
 };
 
 const json = (body: unknown, status = 200) =>
@@ -133,16 +135,20 @@ Deno.serve(async (request: Request) => {
 
   const { data: habitReminders, error: habitReminderError } = await supabase
     .from("habits")
-    .select("id, user_id, name, reminder_time, frequency, schedule_days")
+    .select("id, user_id, name, reminder_time, frequency, schedule_days, start_date, end_date")
     .eq("reminder_enabled", true)
-    .eq("is_paused", false)
-    .is("archived_at", null);
+    .eq("is_paused", false);
   if (habitReminderError) return json({ error: habitReminderError.message }, 500);
 
   for (const habit of (habitReminders ?? []) as HabitReminderRow[]) {
     const setting = settingsByUser.get(habit.user_id) as SettingsRow | undefined;
     const local = localTimes.get(habit.user_id);
     if (!setting || !local || local.time !== habit.reminder_time.slice(0, 5)) continue;
+    if (
+      (habit.start_date && local.day < habit.start_date) ||
+      (habit.end_date && local.day > habit.end_date)
+    )
+      continue;
 
     const weekday = new Date(`${local.day}T12:00:00`).getDay();
     const scheduled =

@@ -62,14 +62,16 @@ describe("gamification rules", () => {
     ).toEqual({ current: 1, longest: 1 });
   });
 
-  it("only counts scheduled days between a habit's creation and archive dates", () => {
+  it("only counts scheduled days between a habit's start and end dates", () => {
     const habit = {
       frequency: "daily",
       created_at: "2026-11-02T18:00:00.000Z",
-      archived_at: "2026-11-04T08:00:00.000Z",
+      start_date: "2026-11-02",
+      end_date: "2026-11-03",
     };
     expect(isHabitScheduledOnDay(habit, "2026-11-01")).toBe(false);
     expect(isHabitScheduledOnDay(habit, "2026-11-02")).toBe(true);
+    expect(isHabitScheduledOnDay(habit, "2026-11-03")).toBe(true);
     expect(isHabitScheduledOnDay(habit, "2026-11-04")).toBe(false);
     expect(scheduledStreakStats(["2026-11-02", "2026-11-03"], "2026-11-05", habit)).toEqual({
       current: 2,

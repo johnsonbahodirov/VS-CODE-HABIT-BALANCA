@@ -136,16 +136,15 @@ function mutationErrorMessage(error: unknown): string {
     if (/maximum|limit|too many/i.test(`${record.message} ${record.details}`)) {
       return record.message || "This habit cannot be added because a limit was reached.";
     }
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message;
-    }
-  }
-  if (error instanceof Error) {
-    console.error("Habit Balance mutation failed", error);
-    return error.message || "Could not save the habit.";
   }
   console.error("Habit Balance mutation failed", error);
-  return "Could not save the habit.";
+  if (
+    error instanceof Error &&
+    error.message === "Habit entries can only be changed within 30 hours."
+  ) {
+    return error.message;
+  }
+  return "Could not save. Please try again.";
 }
 
 const err = (error: unknown) => toast.error(mutationErrorMessage(error));
@@ -553,6 +552,8 @@ export function useAddHabit() {
       difficulty: "easy" | "medium" | "hard";
       reminder_enabled: boolean;
       reminder_time: string;
+      start_date: string;
+      end_date: string | null;
       daily_goal_minutes?: number;
       habit_type?: "yesno" | "timed";
       tracking_type: "yes_no" | "count";
@@ -575,13 +576,13 @@ export function useDeleteHabit() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("habits")
-        .update({ archived_at: new Date().toISOString() })
-        .eq("id", id);
+      const { error } = await supabase.from("habits").delete().eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => qc.invalidateQueries(),
+    onSuccess: () => {
+      qc.invalidateQueries();
+      toast.success("Habit deleted");
+    },
     onError: err,
   });
 }
@@ -713,14 +714,6 @@ export function useToggleLog() {
       }
 
       if (v.done) {
-        const { error: deleteError } = await supabase
-          .from("habit_logs")
-          .delete()
-          .eq("habit_id", v.habit_id)
-          .eq("day", v.day);
-
-        if (deleteError) throw deleteError;
-
         const { error: revokeError } = await supabase.rpc("revoke_habit_completion_xp", {
           p_habit_id: v.habit_id,
           p_day: v.day,

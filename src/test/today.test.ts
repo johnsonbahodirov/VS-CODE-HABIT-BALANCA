@@ -17,20 +17,23 @@ describe("Today habit calculations", () => {
     expect(isTimedHabit({ id: "legacy-yesno", daily_goal_minutes: 0 })).toBe(false);
   });
 
-  it("filters paused, archived, and unscheduled habits from Today", () => {
+  it("filters paused, out-of-range, and unscheduled habits from Today", () => {
     const habits = [
       { id: "today", frequency: "selected_days", schedule_days: [0] },
       { id: "other-day", frequency: "selected_days", schedule_days: [1] },
       { id: "paused", frequency: "selected_days", schedule_days: [0], is_paused: true },
-      {
-        id: "archived",
-        frequency: "selected_days",
-        schedule_days: [0],
-        archived_at: "2026-11-20T00:00:00Z",
-      },
+      { id: "future", start_date: "2026-11-23" },
+      { id: "finished", end_date: "2026-11-21" },
     ];
 
     expect(getTodayHabits(habits, today).map((habit) => habit.id)).toEqual(["today"]);
+  });
+
+  it("includes the end date itself but not later dates", () => {
+    expect(getTodayHabits([{ id: "ends-today", end_date: today }], today)).toHaveLength(1);
+    expect(getTodayHabits([{ id: "ended-yesterday", end_date: "2026-11-21" }], today)).toHaveLength(
+      0,
+    );
   });
 
   it("treats a selected-days schedule with no days as every day", () => {

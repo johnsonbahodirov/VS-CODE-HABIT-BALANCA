@@ -17,7 +17,6 @@ import {
   Users,
   Leaf,
   Settings,
-  Search,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -31,7 +30,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
@@ -66,7 +64,6 @@ function AppLayout() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [userLabel, setUserLabel] = useState("Your account");
-  const [searchValue, setSearchValue] = useState("");
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
@@ -79,23 +76,11 @@ function AppLayout() {
     });
     return () => data.subscription.unsubscribe();
   }, [navigate]);
-  useEffect(() => {
-    const handleHabitSearch = (event: Event) => {
-      if (event instanceof CustomEvent && typeof event.detail === "string")
-        setSearchValue(event.detail);
-    };
-    window.addEventListener("balance-habit-search", handleHabitSearch);
-    return () => window.removeEventListener("balance-habit-search", handleHabitSearch);
-  }, []);
   // Loading settings also syncs the browser timezone to the server (XP and streak days).
   useSettings();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const supportsViewTransitions =
     typeof document !== "undefined" && "startViewTransition" in document;
-  useEffect(() => {
-    if (pathname === "/habits")
-      window.dispatchEvent(new CustomEvent("balance-habit-search", { detail: searchValue }));
-  }, [pathname, searchValue]);
   const signOut = async () => {
     await qc.cancelQueries();
     qc.clear();
@@ -103,15 +88,12 @@ function AppLayout() {
     await supabase.auth.signOut();
     navigate({ to: "/auth", replace: true });
   };
-  const updateSearch = (value: string) => {
-    setSearchValue(value);
-  };
   return (
     <div className="app-shell mx-auto grid min-h-screen w-full max-w-[1360px] grid-cols-1 gap-5 px-5 pb-[calc(6rem+env(safe-area-inset-bottom))] min-[768px]:grid-cols-[64px_minmax(0,1fr)] min-[768px]:pb-0 min-[1100px]:grid-cols-[232px_minmax(0,1fr)]">
       <SocialPresenceHeartbeat />
       <GamificationFeedback />
-      <aside className="app-sidebar hidden self-start min-[768px]:sticky min-[768px]:top-5 min-[768px]:col-start-1 min-[768px]:flex min-[768px]:flex-col min-[768px]:pt-5">
-        <div className="flex flex-col rounded-3xl border bg-surface p-2 shadow-sm min-[1100px]:p-4">
+      <aside className="app-sidebar hidden self-start min-[768px]:sticky min-[768px]:top-4 min-[768px]:col-start-1 min-[768px]:flex min-[768px]:h-[calc(100dvh-2rem)] min-[768px]:flex-col min-[768px]:pt-4">
+        <div className="flex h-full flex-col rounded-3xl border bg-surface p-2 shadow-sm min-[1100px]:p-4">
           <Link
             to="/today"
             viewTransition
@@ -188,28 +170,12 @@ function AppLayout() {
         </div>
       </aside>
       <div className="min-w-0 min-[768px]:col-start-2">
-        <header
-          className={`flex min-h-16 items-center justify-between gap-4 px-4 pt-4 sm:px-6 min-[768px]:min-h-14 min-[768px]:px-0 min-[768px]:pt-0 ${pathname === "/today" ? "min-[1100px]:hidden" : ""}`}
-        >
+        <header className="flex min-h-16 items-center justify-between gap-4 px-4 pt-4 sm:px-6 min-[768px]:hidden">
           <span className="font-mono text-sm font-bold tracking-widest text-primary min-[768px]:hidden">
             BALANCE
           </span>
-          {pathname === "/habits" && (
-            <label className="relative hidden min-w-0 flex-1 min-[768px]:block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchValue}
-                onChange={(event) => updateSearch(event.target.value)}
-                placeholder="Search habits..."
-                aria-label="Search habits"
-                className="h-11 rounded-2xl border-0 bg-surface pl-10 shadow-sm"
-              />
-            </label>
-          )}
         </header>
-        <main
-          className={`app-route-content min-w-0 px-4 pt-3 pb-10 sm:px-6 min-[768px]:px-0 min-[768px]:pt-2 min-[768px]:pb-10 ${pathname === "/today" ? "min-[1100px]:pt-5" : ""}`}
-        >
+        <main className="app-route-content min-w-0 px-4 pt-3 pb-10 sm:px-6 min-[768px]:px-0 min-[768px]:pt-4 min-[768px]:pb-10">
           <div key={pathname} className={supportsViewTransitions ? "" : "route-enter"}>
             <Outlet />
           </div>

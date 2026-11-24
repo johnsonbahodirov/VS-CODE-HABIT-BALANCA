@@ -569,13 +569,15 @@ export function streakStats(
 export type HabitSchedule = {
   frequency?: string | null;
   schedule_days?: number[] | null;
+  start_date?: string | null;
+  end_date?: string | null;
   created_at?: string | null;
-  archived_at?: string | null;
 };
 
 export function isHabitScheduledOnDay(habit: HabitSchedule, day: string): boolean {
-  if (habit.created_at && day < habit.created_at.slice(0, 10)) return false;
-  if (habit.archived_at && day >= habit.archived_at.slice(0, 10)) return false;
+  const startDate = habit.start_date ?? habit.created_at?.slice(0, 10);
+  if (startDate && day < startDate) return false;
+  if (habit.end_date && day > habit.end_date) return false;
   if (habit.frequency === "daily" || !habit.frequency) return true;
   const dayOfWeek = new Date(`${day}T12:00:00`).getDay();
   if (habit.frequency === "weekdays") return dayOfWeek >= 1 && dayOfWeek <= 5;
