@@ -1,0 +1,18 @@
+{
+  "name": "Habit Balance",
+  "short_name": "Balance",
+  "description": "Build daily habits and keep your focus in balance.",
+  "start_url": "/today",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8faf7",
+  "theme_color": "#4c8b6c",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
