@@ -150,11 +150,36 @@ function Stats() {
   const dayNotesQuery = useDayNotes();
   const sessionsQuery = useSessions();
   const settingsQuery = useSettings();
-  const habits = habitsQuery.data ?? EMPTY_ARRAY;
+  const habits = useMemo(
+    () =>
+      (habitsQuery.data ?? EMPTY_ARRAY).map((habit) => ({
+        ...habit,
+        name: habit.name ?? "Unnamed habit",
+        category: habit.category ?? "Uncategorized",
+        color: habit.color ?? "#219B70",
+        frequency: habit.frequency ?? "daily",
+        schedule_days: habit.schedule_days ?? [],
+        skipped_dates: habit.skipped_dates ?? [],
+      })),
+    [habitsQuery.data],
+  );
   const logs = logsQuery.data ?? EMPTY_ARRAY;
   const notes = notesQuery.data ?? EMPTY_ARRAY;
   const dayNotes = dayNotesQuery.data ?? EMPTY_ARRAY;
-  const sessions = sessionsQuery.data ?? EMPTY_ARRAY;
+  const sessions = useMemo(
+    () =>
+      (sessionsQuery.data ?? EMPTY_ARRAY)
+        .filter(
+          (session) =>
+            typeof session.started_at === "string" &&
+            Number.isFinite(Date.parse(session.started_at)) &&
+            (session.ended_at == null ||
+              (typeof session.ended_at === "string" &&
+                Number.isFinite(Date.parse(session.ended_at)))),
+        )
+        .map((session) => ({ ...session, mode: session.mode ?? "stopwatch" })),
+    [sessionsQuery.data],
+  );
   const settings = settingsQuery.data;
   const saveNote = useSaveHabitNote();
   const saveGoal = useSaveTarget();
@@ -173,7 +198,9 @@ function Stats() {
     () =>
       logs.filter((log) => {
         const habit = habits.find((item) => item.id === log.habit_id);
-        return habit?.tracking_type !== "count" || log.count >= (habit.daily_goal_count ?? 1);
+        return (
+          habit?.tracking_type !== "count" || (log.count ?? 0) >= (habit.daily_goal_count ?? 1)
+        );
       }),
     [logs, habits],
   );
@@ -196,7 +223,8 @@ function Stats() {
       sum +
       habits.filter(
         (habit) =>
-          isHabitScheduledOnDay(habit, dayKey(day)) && !habit.skipped_dates.includes(dayKey(day)),
+          isHabitScheduledOnDay(habit, dayKey(day)) &&
+          !(habit.skipped_dates ?? []).includes(dayKey(day)),
       ).length,
     0,
   );
@@ -238,7 +266,7 @@ function Stats() {
         (date) =>
           dayKey(date) <= today &&
           isHabitScheduledOnDay(habit, dayKey(date)) &&
-          !habit.skipped_dates.includes(dayKey(date)),
+          !(habit.skipped_dates ?? []).includes(dayKey(date)),
       );
       const completedDays = scheduledDays.filter((date) =>
         completions.has(`${habit.id}|${dayKey(date)}`),
@@ -259,7 +287,7 @@ function Stats() {
       (transaction) =>
         transaction.day! >= dayKey(weeklyStart) && transaction.day! <= dayKey(weekEnd),
     )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + (transaction.amount ?? 0), 0);
   const chartData =
     range === "day"
       ? minutesByHourOnDay(sessions, selectedDay).map((minutes, hour) => ({
