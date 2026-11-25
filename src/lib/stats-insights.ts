@@ -17,16 +17,29 @@ type HabitMissInsight = {
   scheduled: number;
 };
 
-function getCompletionRate(
+export function getMissedScheduledHabits<T extends InsightHabit>(
+  habits: T[],
+  completions: ReadonlySet<string>,
+  day: string,
+  today: string,
+): T[] {
+  if (day >= today) return [];
+  return habits.filter(
+    (habit) =>
+      isHabitScheduledOnDay(habit, day) &&
+      !isHabitSkippedOnDay(habit, day) &&
+      !completions.has(`${habit.id}|${day}`),
+  );
+}
+
+export function calculateScheduledCompletions(
   habits: InsightHabit[],
   completions: ReadonlySet<string>,
   dates: string[],
-  today: string,
-) {
+): { completed: number; scheduled: number; completionRate: number } {
   let completed = 0;
   let scheduled = 0;
   for (const date of dates) {
-    if (date > today) continue;
     for (const habit of habits) {
       if (!isHabitScheduledOnDay(habit, date) || isHabitSkippedOnDay(habit, date)) continue;
       scheduled += 1;
@@ -38,6 +51,19 @@ function getCompletionRate(
     scheduled,
     completionRate: scheduled ? Math.round((completed / scheduled) * 100) : 0,
   };
+}
+
+function getCompletionRate(
+  habits: InsightHabit[],
+  completions: ReadonlySet<string>,
+  dates: string[],
+  today: string,
+) {
+  return calculateScheduledCompletions(
+    habits,
+    completions,
+    dates.filter((date) => date <= today),
+  );
 }
 
 export function calculateWeeklyInsights(

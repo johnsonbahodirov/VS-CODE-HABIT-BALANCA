@@ -1,14 +1,5 @@
-export const HABIT_DURATION_PRESETS = ["21", "30", "65", "90"] as const;
-
-export type HabitDurationOption = "" | (typeof HABIT_DURATION_PRESETS)[number] | "custom";
 export type HabitDurationError =
-  "chooseDuration" | "chooseStartDate" | "chooseEndDate" | "invalidEndDate";
-
-export function isHabitDurationPreset(
-  value: HabitDurationOption,
-): value is (typeof HABIT_DURATION_PRESETS)[number] {
-  return HABIT_DURATION_PRESETS.some((preset) => preset === value);
-}
+  "chooseStartDate" | "chooseEndDate" | "invalidEndDate" | "invalidDays";
 
 export function habitEndDateAfterDays(startDate: string, days: number): string {
   const date = new Date(`${startDate}T00:00:00Z`);
@@ -23,12 +14,16 @@ export function inclusiveHabitDurationDays(startDate: string, endDate: string): 
 }
 
 export function getHabitDurationError(
-  option: HabitDurationOption,
+  durationDays: string,
   startDate: string,
   endDate: string,
 ): HabitDurationError | null {
-  if (!option) return "chooseDuration";
   if (!startDate) return "chooseStartDate";
+  if (!durationDays && !endDate) return null;
+  if (durationDays) {
+    const days = Number(durationDays);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) return "invalidDays";
+  }
   if (!endDate) return "chooseEndDate";
   if (endDate < startDate) return "invalidEndDate";
   return null;

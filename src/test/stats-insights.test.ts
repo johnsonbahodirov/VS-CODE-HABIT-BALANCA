@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { calculateWeeklyInsights } from "@/lib/stats-insights";
+import { calculateWeeklyInsights, getMissedScheduledHabits } from "@/lib/stats-insights";
 
 describe("weekly Stats insights", () => {
+  it("offers catch-up only for past, scheduled, unskipped, incomplete days", () => {
+    const habits = [
+      { id: "daily", name: "Daily", frequency: "daily", skipped_dates: [] },
+      {
+        id: "weekdays",
+        name: "Weekdays",
+        frequency: "weekdays",
+        skipped_dates: [],
+      },
+      { id: "skipped", name: "Skipped", frequency: "daily", skipped_dates: ["2026-11-24"] },
+      { id: "done", name: "Done", frequency: "daily", skipped_dates: [] },
+    ];
+
+    expect(
+      getMissedScheduledHabits(
+        habits,
+        new Set(["done|2026-11-24"]),
+        "2026-11-24",
+        "2026-11-25",
+      ).map((habit) => habit.id),
+    ).toEqual(["daily", "weekdays"]);
+    expect(getMissedScheduledHabits(habits, new Set(), "2026-11-25", "2026-11-25")).toEqual([]);
+  });
+
   it("compares completion rates using scheduled, non-skipped days only", () => {
     const habits = [
       { id: "daily", name: "Daily", frequency: "daily", skipped_dates: ["2026-11-25"] },

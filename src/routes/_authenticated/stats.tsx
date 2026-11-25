@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { endOfWeek, format, startOfMonth, startOfWeek } from "date-fns";
+import { endOfWeek, format, startOfWeek } from "date-fns";
 import {
   ArrowLeft,
   ArrowRight,
@@ -31,6 +31,7 @@ import {
   useSaveDayNote,
   useSaveHabitNote,
   useSaveTarget,
+  useToggleLog,
   useXPTransactionsBetween,
   useSessions,
   useSettings,
@@ -47,14 +48,20 @@ import { HabitBadge } from "@/components/app-widgets";
 import { DatabaseErrorNotice } from "@/components/database-error-notice";
 import { isHabitScheduledOnDay, scheduledStreakStats } from "@/lib/gamification";
 import { HABIT_COLORS, HABIT_COLOR_VALUES } from "@/lib/data";
-import { calculateWeeklyInsights } from "@/lib/stats-insights";
+import {
+  calculateScheduledCompletions,
+  calculateWeeklyInsights,
+  getMissedScheduledHabits,
+} from "@/lib/stats-insights";
+import { getCustomElapsedDays, getStatsPeriod, type StatsRange } from "@/lib/stats-periods";
 import { COPY } from "@/lib/strings";
 
 const StatsChart = lazy(() => import("@/components/stats-chart"));
 const StatsBreakdownChart = lazy(() => import("@/components/stats-breakdown-chart"));
 
-type Range = "day" | "week" | "month" | "3months" | "6months" | "year";
+type Range = StatsRange;
 type StatsView = "trend" | "breakdown";
+type CompareMode = "previous" | "custom";
 
 const EMPTY_ARRAY: never[] = [];
 const ALL_HABITS = "all";
@@ -77,35 +84,6 @@ function shiftDate(date: Date, range: Range, direction: number): Date {
   else if (range === "6months") next.setMonth(next.getMonth() + direction * 6);
   else next.setFullYear(next.getFullYear() + direction);
   return next;
-}
-
-function periodStart(date: Date, range: Range): Date {
-  if (range === "day") return date;
-  if (range === "week") return startOfWeek(date, { weekStartsOn: 1 });
-  if (range === "month") return startOfMonth(date);
-  const start = new Date(date);
-  start.setMonth(start.getMonth() - (range === "3months" ? 2 : range === "6months" ? 5 : 11));
-  return startOfMonth(start);
-}
-
-function periodEnd(date: Date, range: Range): Date {
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
-  if (range === "day") return end;
-  if (range === "week") {
-    const last = startOfWeek(date, { weekStartsOn: 1 });
-    last.setDate(last.getDate() + 6);
-    last.setHours(23, 59, 59, 999);
-    return last;
-  }
-  if (range === "month") {
-    const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    last.setHours(23, 59, 59, 999);
-    return last;
-  }
-  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  last.setHours(23, 59, 59, 999);
-  return last;
 }
 
 function dateList(start: Date, end: Date): Date[] {
@@ -140,6 +118,17 @@ export const Route = createFileRoute("/_authenticated/stats")({
 function Stats() {
   const [range, setRange] = useState<Range>("week");
   const [statsView, setStatsView] = useState<StatsView>("trend");
+  const [compareMode, setCompareMode] = useState<CompareMode>("previous");
+  const [customCompareStart, setCustomCompareStart] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 13);
+    return dayKey(date);
+  });
+  const [customCompareEnd, setCustomCompareEnd] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return dayKey(date);
+  });
   const [selectedDay, setSelectedDay] = useState(dayKey(new Date()));
   const [selectedHabitId, setSelectedHabitId] = useState(ALL_HABITS);
   const selectedDate = new Date(`${selectedDay}T12:00:00`);
@@ -183,16 +172,40 @@ function Stats() {
   const settings = settingsQuery.data;
   const saveNote = useSaveHabitNote();
   const saveGoal = useSaveTarget();
-
-  const start = periodStart(selectedDate, range);
-  const periodLastDay = periodEnd(selectedDate, range);
-  const todayDate = new Date(`${today}T12:00:00`);
-  const end = periodLastDay > todayDate ? todayDate : periodLastDay;
-  const days = dateList(start, end);
+  const toggleLog = useToggleLog();
+  const period = getStatsPeriod(selectedDay, range, today);
+  const start = new Date(`${period.startDay}T12:00:00`);
+  const periodLastDay = new Date(`${period.endDay}T12:00:00`);
+  const end = periodLastDay;
+  const days = period.elapsedDays.map((day) => new Date(`${day}T12:00:00`));
+  const fullPeriodDays = period.fullDays.map((day) => new Date(`${day}T12:00:00`));
+  const customComparisonDays = getCustomElapsedDays(
+    customCompareStart,
+    customCompareEnd,
+    today,
+    Math.max(period.elapsedDays.length, 1),
+  );
+  const comparisonDays =
+    compareMode === "custom"
+      ? customComparisonDays.slice(-period.elapsedDays.length)
+      : period.previousDays;
+  const currentComparisonDays =
+    compareMode === "custom"
+      ? comparisonDays.length
+        ? period.elapsedDays.slice(-comparisonDays.length)
+        : []
+      : period.elapsedDays;
+  const comparisonLabel =
+    compareMode === "custom"
+      ? `Custom comparison · ${comparisonDays.length} days`
+      : `Previous ${comparisonDays.length}-day period`;
   const weeklyStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
   const weekEnd = new Date(weeklyStart);
   weekEnd.setDate(weekEnd.getDate() + 6);
-  const xpHistoryQuery = useXPTransactionsBetween(dayKey(weeklyStart), dayKey(weekEnd));
+  const xpHistoryQuery = useXPTransactionsBetween(
+    range === "week" ? period.startDay : dayKey(weeklyStart),
+    range === "week" ? (period.elapsedEndDay ?? period.startDay) : dayKey(weekEnd),
+  );
   const xpHistory = xpHistoryQuery.data ?? EMPTY_ARRAY;
   const completedLogs = useMemo(
     () =>
@@ -217,47 +230,44 @@ function Stats() {
   }, [completedLogs]);
   const dailyGoal = settings?.daily_goal_minutes ?? 120;
   const totalMinutes = days.reduce((sum, day) => sum + (timeByDay.get(dayKey(day)) ?? 0), 0);
-  const totalDone = days.reduce((sum, day) => sum + (logCounts.get(dayKey(day)) ?? 0), 0);
-  const possible = days.reduce(
-    (sum, day) =>
-      sum +
-      habits.filter(
-        (habit) =>
-          isHabitScheduledOnDay(habit, dayKey(day)) &&
-          !(habit.skipped_dates ?? []).includes(dayKey(day)),
-      ).length,
-    0,
+  const periodStats = calculateScheduledCompletions(habits, completions, period.elapsedDays);
+  const currentComparisonStats = calculateScheduledCompletions(
+    habits,
+    completions,
+    currentComparisonDays,
   );
-  const completionRate = possible ? Math.round((totalDone / possible) * 100) : 0;
-  const priorWeekStart = new Date(weeklyStart);
-  priorWeekStart.setDate(priorWeekStart.getDate() - 7);
-  const totalForWeek = (weekStart: Date) =>
-    Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(weekStart);
-      date.setDate(date.getDate() + index);
-      return timeByDay.get(dayKey(date)) ?? 0;
-    }).reduce((sum, minutes) => sum + minutes, 0);
-  const currentWeekMinutes = totalForWeek(weeklyStart);
-  const previousWeekMinutes = totalForWeek(priorWeekStart);
+  const previousComparisonStats = calculateScheduledCompletions(
+    habits,
+    completions,
+    comparisonDays,
+  );
+  const totalDone = periodStats.completed;
+  const possible = periodStats.scheduled;
+  const completionRate = periodStats.completionRate;
+  const totalComparisonMinutes = (dateKeys: string[]) =>
+    dateKeys.reduce((sum, day) => sum + (timeByDay.get(day) ?? 0), 0);
+  const previousComparisonMinutes = totalComparisonMinutes(comparisonDays);
+  const currentWeekMinutes = totalComparisonMinutes(period.elapsedDays);
+  const previousWeekMinutes = totalComparisonMinutes(period.previousDays);
   const weeklyGrowth =
     previousWeekMinutes > 0
       ? Math.round(((currentWeekMinutes - previousWeekMinutes) / previousWeekMinutes) * 100)
       : null;
-  const weekDates = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(weeklyStart);
-    date.setDate(date.getDate() + index);
-    return date;
-  });
-  const previousWeekDates = weekDates.map((date) => {
-    const previous = new Date(date);
-    previous.setDate(previous.getDate() - 7);
-    return previous;
-  });
+  const weekDates =
+    range === "week"
+      ? period.fullDays.map((day) => new Date(`${day}T12:00:00`))
+      : dateList(weeklyStart, weekEnd);
   const weeklyInsights = calculateWeeklyInsights(
     habits,
     completions,
-    weekDates.map(dayKey),
-    previousWeekDates.map(dayKey),
+    range === "week" ? period.fullDays : weekDates.map(dayKey),
+    range === "week"
+      ? period.previousDays
+      : weekDates.map((date) => {
+          const previous = new Date(date);
+          previous.setDate(previous.getDate() - 7);
+          return dayKey(previous);
+        }),
     today,
   );
   const bestHabitThisWeek = habits
@@ -282,10 +292,10 @@ function Stats() {
     { date: null, minutes: 0 },
   );
   const weekXp = xpHistory
-    .filter((transaction) => transaction.day)
     .filter(
       (transaction) =>
-        transaction.day! >= dayKey(weeklyStart) && transaction.day! <= dayKey(weekEnd),
+        transaction.day &&
+        transaction.day <= (range === "week" ? (period.elapsedEndDay ?? today) : dayKey(weekEnd)),
     )
     .reduce((sum, transaction) => sum + (transaction.amount ?? 0), 0);
   const chartData =
@@ -296,14 +306,12 @@ function Stats() {
           minutes: Math.round(minutes),
           completed: 0,
         }))
-      : (range === "week" || range === "month" ? dateList(start, periodLastDay) : days).map(
-          (day) => ({
-            date: dayKey(day),
-            label: format(day, range === "year" ? "MMM" : "MMM d"),
-            minutes: Math.round(timeByDay.get(dayKey(day)) ?? 0),
-            completed: logCounts.get(dayKey(day)) ?? 0,
-          }),
-        );
+      : fullPeriodDays.map((day) => ({
+          date: dayKey(day),
+          label: format(day, range === "year" ? "MMM" : "MMM d"),
+          minutes: Math.round(timeByDay.get(dayKey(day)) ?? 0),
+          completed: calculateScheduledCompletions(habits, completions, [dayKey(day)]).completed,
+        }));
   const breakdownData = useMemo(() => {
     const categories = new Map<string, number>();
     for (const habit of habits) {
@@ -365,6 +373,7 @@ function Stats() {
       completions.has(`${habit.id}|${selectedDay}`)
     );
   });
+  const catchUpHabits = getMissedScheduledHabits(habits, completions, selectedDay, today);
   const selectedDayStart = new Date(`${selectedDay}T00:00:00`);
   const selectedDayEnd = new Date(
     selectedDayStart.getFullYear(),
@@ -499,6 +508,54 @@ function Stats() {
           </div>
         </div>
 
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            Compare with
+            <select
+              value={compareMode}
+              onChange={(event) =>
+                setCompareMode(event.target.value === "custom" ? "custom" : "previous")
+              }
+              className="h-10 rounded-xl border bg-background px-3 text-sm text-foreground"
+            >
+              <option value="previous">Previous equal-length period</option>
+              <option value="custom">Custom date range</option>
+            </select>
+          </label>
+          {compareMode === "custom" && (
+            <>
+              <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                Compare from
+                <Input
+                  type="date"
+                  value={customCompareStart}
+                  max={today}
+                  aria-label="Custom comparison start date"
+                  onChange={(event) => setCustomCompareStart(event.target.value)}
+                  className="h-10"
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                Compare through
+                <Input
+                  type="date"
+                  value={customCompareEnd}
+                  min={customCompareStart}
+                  max={today}
+                  aria-label="Custom comparison end date"
+                  onChange={(event) => setCustomCompareEnd(event.target.value)}
+                  className="h-10"
+                />
+              </label>
+              {!comparisonDays.length && (
+                <p role="status" className="pb-2 text-xs text-muted-foreground">
+                  Choose a valid past date range to compare.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
         <div
           role="group"
           aria-label="Statistics visualization"
@@ -526,15 +583,30 @@ function Stats() {
         </div>
 
         <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <StatTile icon={<Clock3 />} label="Focused" value={formatMinutes(totalMinutes)} />
-          <StatTile icon={<Target />} label="Completions" value={String(totalDone)} />
-          <StatTile icon={<Flame />} label="Consistency" value={`${completionRate}%`} />
+          <StatTile
+            icon={<Clock3 />}
+            label="Focus time"
+            value={formatMinutes(totalComparisonMinutes(currentComparisonDays))}
+            detail={`${comparisonLabel}: ${formatMinutes(previousComparisonMinutes)}`}
+          />
+          <StatTile
+            icon={<Target />}
+            label="Completions"
+            value={String(currentComparisonStats.completed)}
+            detail={`${comparisonLabel}: ${previousComparisonStats.completed}`}
+          />
+          <StatTile
+            icon={<Flame />}
+            label="Consistency"
+            value={`${currentComparisonStats.completionRate}%`}
+            detail={`${comparisonLabel}: ${previousComparisonStats.completionRate}%`}
+          />
         </div>
 
         <div className="mt-6 h-60 w-full rounded-2xl bg-background/50 px-1 pt-3 sm:h-72 sm:px-3">
           <Suspense fallback={<div className="h-full animate-pulse rounded-2xl bg-cell" />}>
             {statsView === "trend" ? (
-              <StatsChart data={chartData} />
+              <StatsChart data={chartData} showCompletions={range !== "day"} />
             ) : (
               <StatsBreakdownChart data={breakdownData} />
             )}
@@ -579,7 +651,7 @@ function Stats() {
             </div>
           </div>
           <p className="mt-4 rounded-2xl bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
-            This week: {formatMinutes(currentWeekMinutes)} / Last week:{" "}
+            This week to date: {formatMinutes(currentWeekMinutes)} / Previous equal-length period:{" "}
             {formatMinutes(previousWeekMinutes)} / Improvement:{" "}
             <span
               className={cn(
@@ -594,33 +666,15 @@ function Stats() {
               {weeklyGrowth === null ? "New" : `${weeklyGrowth > 0 ? "+" : ""}${weeklyGrowth}%`}
             </span>
           </p>
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <InsightTile label="Habit completions" value={String(totalDone)} icon={<Check />} />
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <InsightTile
-              label="Focus time"
-              value={formatMinutes(currentWeekMinutes)}
-              icon={<Clock3 />}
-            />
-            <InsightTile
-              label="Best day"
+              label={COPY.stats.bestDay}
               value={
                 bestDay.date
                   ? `${format(bestDay.date, "EEE")} · ${formatMinutes(bestDay.minutes)}`
                   : "No focus time"
               }
               icon={<Flame />}
-            />
-            <InsightTile label="XP earned" value={`+${weekXp} XP`} icon={<Award />} />
-          </div>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <InsightTile
-              label={COPY.stats.weeklyCompletion}
-              value={COPY.stats.weekComparison(
-                weeklyInsights.completionRate,
-                weeklyInsights.previousCompletionRate,
-                weeklyInsights.completionRateChange,
-              )}
-              icon={<Check />}
             />
             <InsightTile
               label={COPY.stats.bestWeekday}
@@ -640,28 +694,17 @@ function Stats() {
               }
               icon={<Target />}
             />
+            <InsightTile
+              label="Best habit"
+              value={
+                bestHabitThisWeek && bestHabitThisWeek.completedDays > 0
+                  ? `${bestHabitThisWeek.habit.name} · ${bestHabitThisWeek.completedDays}/${bestHabitThisWeek.scheduledDays}`
+                  : "No completed habits yet"
+              }
+              icon={<Award />}
+            />
+            <InsightTile label="XP earned" value={`+${weekXp} XP`} icon={<Sparkles />} />
           </div>
-          <div className="mt-4 rounded-2xl border border-primary/10 bg-background/60 px-4 py-3">
-            <p className="text-xs font-medium text-muted-foreground">Your best habit this week</p>
-            {bestHabitThisWeek && bestHabitThisWeek.completedDays > 0 ? (
-              <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
-                <p className="font-semibold">{bestHabitThisWeek.habit.name}</p>
-                <p className="text-sm text-muted-foreground">
-                  {bestHabitThisWeek.completedDays} of {bestHabitThisWeek.scheduledDays} days
-                  completed ·{" "}
-                  {Math.round(
-                    (bestHabitThisWeek.completedDays / bestHabitThisWeek.scheduledDays) * 100,
-                  )}
-                  %
-                </p>
-              </div>
-            ) : (
-              <p className="mt-1 text-sm text-muted-foreground">No completed habits yet.</p>
-            )}
-          </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            {COPY.stats.week(completionRate)}. Small, repeated actions build lasting progress.
-          </p>
         </section>
       )}
 
@@ -676,7 +719,7 @@ function Stats() {
             <InsightTile label="Habit completions" value={String(totalDone)} icon={<Check />} />
             <InsightTile label="Success rate" value={`${completionRate}%`} icon={<Target />} />
             <InsightTile
-              label="Best day"
+              label={COPY.stats.bestDay}
               value={
                 bestDay.date
                   ? `${format(bestDay.date, "EEE, MMM d")} · ${formatMinutes(bestDay.minutes)}`
@@ -696,7 +739,9 @@ function Stats() {
           <div>
             <h2 className="text-lg font-semibold">Habit progress</h2>
             <p className="text-sm text-muted-foreground">
-              Completion and focused time for this period
+              {range === "day"
+                ? "Focused time by hour"
+                : "Scheduled completions and focused time for this period"}
             </p>
           </div>
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -718,12 +763,15 @@ function Stats() {
         {habits.length ? (
           <div className="grid gap-3 md:grid-cols-2">
             {habits.map((habit) => {
-              const completed = days.filter((day) =>
+              const scheduledDates = days.filter(
+                (day) =>
+                  isHabitScheduledOnDay(habit, dayKey(day)) &&
+                  !(habit.skipped_dates ?? []).includes(dayKey(day)),
+              );
+              const completed = scheduledDates.filter((day) =>
                 completions.has(`${habit.id}|${dayKey(day)}`),
               ).length;
-              const scheduledDays = days.filter((day) =>
-                isHabitScheduledOnDay(habit, dayKey(day)),
-              ).length;
+              const scheduledDays = scheduledDates.length;
               const rate = scheduledDays ? Math.round((completed / scheduledDays) * 100) : 0;
               const minutes = days.reduce(
                 (sum, day) => sum + (timeByHabitDay.get(`${habit.id}|${dayKey(day)}`) ?? 0),
@@ -981,6 +1029,42 @@ function Stats() {
               step away.
             </p>
           )}
+          {catchUpHabits.length > 0 && (
+            <div className="mt-4 border-t pt-3">
+              <h3 className="text-sm font-semibold">Missed scheduled check-ins</h3>
+              <ul className="mt-2 space-y-2">
+                {catchUpHabits.map((habit) => (
+                  <li
+                    key={habit.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-cell/60 px-3 py-2"
+                  >
+                    <span className="text-sm">{habit.name}</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={toggleLog.isPending}
+                      onClick={() =>
+                        toggleLog.mutate(
+                          habit.tracking_type === "count"
+                            ? {
+                                habit_id: habit.id,
+                                day: selectedDay,
+                                done: false,
+                                count: habit.daily_goal_count ?? 1,
+                                currentCount: 0,
+                              }
+                            : { habit_id: habit.id, day: selectedDay, done: false },
+                        )
+                      }
+                    >
+                      Catch up
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="mt-4 border-t pt-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">Focus sessions</h3>
@@ -1071,10 +1155,12 @@ function StatTile({
   icon,
   label,
   value,
+  detail,
 }: {
   icon: import("react").ReactNode;
   label: string;
   value: string;
+  detail?: string;
 }) {
   return (
     <div className="rounded-2xl border border-primary/10 bg-primary/[0.035] p-4">
@@ -1083,6 +1169,7 @@ function StatTile({
         {label}
       </span>
       <p className="mt-1 font-mono text-lg font-bold sm:text-xl">{value}</p>
+      {detail && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
     </div>
   );
 }

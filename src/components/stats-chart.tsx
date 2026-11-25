@@ -1,7 +1,8 @@
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,23 +16,27 @@ export type StatsChartPoint = {
   completed: number;
 };
 
-export default function StatsChart({ data }: { data: StatsChartPoint[] }) {
-  const isEmpty = data.every((point) => point.minutes <= 0);
+export default function StatsChart({
+  data,
+  showCompletions = true,
+}: {
+  data: StatsChartPoint[];
+  showCompletions?: boolean;
+}) {
+  const isEmpty = data.every((point) => point.minutes <= 0 && point.completed <= 0);
   return (
     <div className="relative size-full">
       {isEmpty && (
         <p className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          No focus time in this period yet. Start a timer on Today to see your trend.
+          No focus time in this period yet. Start a timer to see your trend.
         </p>
       )}
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: -18 }}>
-          <defs>
-            <linearGradient id="minutes-fill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.38} />
-              <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+        <BarChart
+          accessibilityLayer
+          data={data}
+          margin={{ top: 8, right: 4, bottom: 0, left: -18 }}
+        >
           <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
           <XAxis
             dataKey="label"
@@ -40,9 +45,23 @@ export default function StatsChart({ data }: { data: StatsChartPoint[] }) {
             minTickGap={24}
             tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
           />
+          {showCompletions && (
+            <YAxis
+              yAxisId="completions"
+              tickLine={false}
+              axisLine={false}
+              allowDecimals={false}
+              domain={[0, (maximum: number) => Math.max(maximum, 1)]}
+              tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+            />
+          )}
           <YAxis
+            yAxisId="minutes"
+            orientation={showCompletions ? "right" : "left"}
             tickLine={false}
             axisLine={false}
+            allowDecimals={false}
+            domain={[0, (maximum: number) => Math.max(maximum, 1)]}
             tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
           />
           <Tooltip
@@ -51,16 +70,30 @@ export default function StatsChart({ data }: { data: StatsChartPoint[] }) {
               borderColor: "var(--border)",
               borderRadius: 16,
             }}
-            formatter={(value) => [`${value} min`, "Focus"]}
+            formatter={(value, name) =>
+              name === "Completions"
+                ? [`${Number(value ?? 0)} completed`, "Completions"]
+                : [`${Number(value ?? 0)} min`, "Focus time"]
+            }
           />
-          <Area
-            type="monotone"
+          {showCompletions && <Legend />}
+          <Bar
             dataKey="minutes"
-            stroke="var(--primary)"
-            strokeWidth={3}
-            fill="url(#minutes-fill)"
+            name="Focus time"
+            fill="var(--primary)"
+            radius={[6, 6, 0, 0]}
+            yAxisId="minutes"
           />
-        </AreaChart>
+          {showCompletions && (
+            <Bar
+              dataKey="completed"
+              name="Completions"
+              fill="var(--chart-2)"
+              radius={[6, 6, 0, 0]}
+              yAxisId="completions"
+            />
+          )}
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );
