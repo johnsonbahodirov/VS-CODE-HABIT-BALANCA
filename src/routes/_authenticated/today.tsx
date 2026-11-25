@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock3, Flame, Plus, Play, Timer, Trophy, X } from "lucide-react";
 import { HabitList, TimerCard, type TimerSnapshot } from "@/components/app-widgets";
@@ -7,11 +7,27 @@ import { DatabaseErrorNotice } from "@/components/database-error-notice";
 import { DailyGoalSuggestionDialog } from "@/components/daily-goal-suggestion-dialog";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { dayKey, formatMinutes, minutesByHabitAndDay } from "@/lib/balance";
+import { dayKey, formatMinutes, minutesByDay, minutesByHabitAndDay } from "@/lib/balance";
 import { getTodayFocusPlan, getTodayHabits } from "@/lib/today";
-import { useAchievements, useHabitLogs, useHabits, useSessions, useSettings } from "@/lib/data";
-import { detectComeback, scheduledStreakStats } from "@/lib/gamification";
+import {
+  useAchievements,
+  useHabitLogs,
+  useHabits,
+  useSessions,
+  useSettings,
+  useSocialOverview,
+  useXPSummary,
+} from "@/lib/data";
+import {
+  ACHIEVEMENTS,
+  detectComeback,
+  getAchievementProgress,
+  scheduledStreakStats,
+} from "@/lib/gamification";
+import { calculateAchievementUserStats } from "@/lib/achievement-stats";
 import { playOptionalSound, vibrate } from "@/lib/haptics";
+import { isHabitSkippedOnDay } from "@/lib/today";
+import { COPY } from "@/lib/strings";
 
 export const Route = createFileRoute("/_authenticated/today")({
   head: () => ({ meta: [{ title: "Today — Balance" }] }),
@@ -52,6 +68,8 @@ function Today() {
   const habitsQuery = useHabits();
   const logsQuery = useHabitLogs();
   const achievementsQuery = useAchievements();
+  const socialQuery = useSocialOverview();
+  const xpQuery = useXPSummary();
 
   const [dismissedComeback, setDismissedComeback] = useState(false);
   const [newHabitOpen, setNewHabitOpen] = useState(false);
@@ -60,6 +78,8 @@ function Today() {
   const [mobileTimerOpen, setMobileTimerOpen] = useState(false);
   const [todaySummaryOpen, setTodaySummaryOpen] = useState(true);
   const [achievementOpen, setAchievementOpen] = useState(false);
+  const [celebrationDay, setCelebrationDay] = useState("");
+  const [confirmedCompletionDay, setConfirmedCompletionDay] = useState("");
   const [timerSnapshot, setTimerSnapshot] = useState<TimerSnapshot>({
     active: false,
     time: "25:00",
@@ -107,32 +127,43 @@ function Today() {
 
   const todayKeyStr = dayKey(now);
   const sessions = useMemo(() => sessionsQuery.data ?? [], [sessionsQuery.data]);
-  const habits = habitsQuery.data ?? [];
+  const habits = useMemo(() => habitsQuery.data ?? [], [habitsQuery.data]);
   const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
+  const achievementStats = useMemo(
+    () => calculateAchievementUserStats(habits, logs, xpQuery.data?.totalXp ?? 0, todayKeyStr),
+    [habits, logs, todayKeyStr, xpQuery.data?.totalXp],
+  );
 
   useEffect(() => {
     const activeSession = sessions.find((session) => !session.ended_at);
     if (activeSession?.habit_id) setSelectedTimedHabitId(activeSession.habit_id);
   }, [sessions]);
 
-  const unlocked = new Set(
-    (achievementsQuery.data?.unlocked ?? []).map((item) => item.achievement_key),
+  const unlocked = useMemo(
+    () => new Set((achievementsQuery.data?.unlocked ?? []).map((item) => item.achievement_key)),
+    [achievementsQuery.data?.unlocked],
   );
-  const nextAchievement = achievementsQuery.data?.catalog.find((item) => !unlocked.has(item.key));
+  const nextAchievement = useMemo(() => {
+    const candidates = (achievementsQuery.data?.catalog ?? [])
+      .flatMap((item) => {
+        const definition = ACHIEVEMENTS.find((achievement) => achievement.key === item.key);
+        return definition
+          ? [{ ...item, progress: getAchievementProgress(definition, achievementStats) }]
+          : [];
+      })
+      .filter((item) => !unlocked.has(item.key));
+    candidates.sort(
+      (left, right) =>
+        right.progress.percentage - left.progress.percentage || left.sort_order - right.sort_order,
+    );
+    return candidates[0] ?? null;
+  }, [achievementsQuery.data?.catalog, achievementStats, unlocked]);
 
-  const pomodoroSessionsToday = sessions.filter(
+  const pomodorosToday = sessions.filter(
     (session) =>
-      session.mode === "pomodoro" &&
-      session.ended_at &&
-      dayKey(new Date(session.started_at)) === todayKeyStr,
-  );
-  const pomodorosToday = pomodoroSessionsToday.length;
-  const pomodoroMinutesToday = pomodoroSessionsToday.reduce(
-    (total, session) =>
-      total +
-      (new Date(session.ended_at!).getTime() - new Date(session.started_at).getTime()) / 60000,
-    0,
-  );
+      session.mode === "pomodoro" && dayKey(new Date(session.started_at)) === todayKeyStr,
+  ).length;
+  const focusMinutesToday = minutesByDay(sessions, now).get(todayKeyStr) ?? 0;
 
   const isNewUser = !habitsQuery.isLoading && !habitsQuery.isError && habits.length === 0;
 
@@ -170,6 +201,7 @@ function Today() {
   }, [todayKeyStr]);
 
   const scheduledHabits = getTodayHabits(habits, todayKeyStr);
+  const countedHabits = scheduledHabits.filter((habit) => !isHabitSkippedOnDay(habit, todayKeyStr));
   const todayMinutesByHabit = minutesByHabitAndDay(sessions, now);
   const focusPlan = getTodayFocusPlan(habits, todayMinutesByHabit, todayKeyStr);
   const dailyGoal = focusPlan.plannedMinutes;
@@ -186,32 +218,71 @@ function Today() {
       .map((log) => log.habit_id),
   );
 
-  const completedToday = scheduledHabits.filter((habit) => completedHabitIds.has(habit.id)).length;
-  const allHabitsDone = scheduledHabits.length > 0 && completedToday === scheduledHabits.length;
-  const previousAllDone = useRef<boolean | null>(null);
+  const completedToday = countedHabits.filter((habit) => completedHabitIds.has(habit.id)).length;
+  const allHabitsDone = countedHabits.length > 0 && completedToday === countedHabits.length;
+  const celebrationHandled = useRef<string | null>(null);
 
   useEffect(() => {
-    if (habitsQuery.isLoading || logsQuery.isLoading) {
-      previousAllDone.current = null;
-      return;
-    }
-    if (previousAllDone.current === false && allHabitsDone) {
-      vibrate([30, 50, 30, 50, 60]);
-      playOptionalSound("all-done");
-    }
-    previousAllDone.current = allHabitsDone;
-  }, [allHabitsDone, habitsQuery.isLoading, logsQuery.isLoading]);
+    const handleConfirmedCompletion = (event: Event) => {
+      if (event instanceof CustomEvent && typeof event.detail === "string")
+        setConfirmedCompletionDay(event.detail);
+    };
+    window.addEventListener("balance-habit-completion-confirmed", handleConfirmedCompletion);
+    return () =>
+      window.removeEventListener("balance-habit-completion-confirmed", handleConfirmedCompletion);
+  }, []);
 
-  const completionRate = scheduledHabits.length
-    ? Math.round((completedToday / scheduledHabits.length) * 100)
+  useEffect(() => {
+    if (
+      !allHabitsDone ||
+      confirmedCompletionDay !== todayKeyStr ||
+      habitsQuery.isLoading ||
+      logsQuery.isLoading
+    )
+      return;
+    if (celebrationHandled.current === todayKeyStr) return;
+    celebrationHandled.current = todayKeyStr;
+    const key = `balance-all-done-${todayKeyStr}`;
+    try {
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "true");
+    } catch (error) {
+      console.warn("Could not save today's celebration state.", error);
+    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    setCelebrationDay(todayKeyStr);
+    vibrate([30, 50, 30, 50, 60]);
+    playOptionalSound("all-done");
+    const timeout = window.setTimeout(() => setCelebrationDay(""), 1200);
+    return () => window.clearTimeout(timeout);
+  }, [
+    allHabitsDone,
+    confirmedCompletionDay,
+    habitsQuery.isLoading,
+    logsQuery.isLoading,
+    todayKeyStr,
+  ]);
+
+  const completionRate = countedHabits.length
+    ? Math.round((completedToday / countedHabits.length) * 100)
     : 0;
 
-  const progressNote =
-    scheduledHabits.length === 0
-      ? "Nothing scheduled today"
-      : completedToday === scheduledHabits.length
-        ? "All done. Nice work."
-        : `${scheduledHabits.length - completedToday} to go`;
+  const progressNote = allHabitsDone
+    ? COPY.today.progress.complete
+    : completedToday === 0
+      ? COPY.today.progress.start
+      : completedToday * 2 < countedHabits.length
+        ? COPY.today.progress.beginning
+        : COPY.today.progress.halfway;
+  const greetingHour = now.getHours();
+  const greeting =
+    greetingHour >= 5 && greetingHour < 12
+      ? COPY.today.morning
+      : greetingHour >= 12 && greetingHour < 18
+        ? COPY.today.afternoon
+        : COPY.today.evening;
+  const firstName = socialQuery.data?.profile.display_name.trim().split(/\s+/)[0];
+  const waitingCount = Math.max(0, countedHabits.length - completedToday);
 
   const currentStreak = Math.max(
     0,
@@ -229,6 +300,23 @@ function Today() {
       return scheduledStreakStats(completedDays, todayKeyStr, habit).current;
     }),
   );
+  const selectTimedHabit = (habitId: string) => {
+    setSelectedTimedHabitId(habitId);
+    if (!habitId) return;
+    setTimerClosed(false);
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      setMobileTimerOpen(true);
+    } else {
+      window.requestAnimationFrame(() =>
+        document.getElementById("focus-timer")?.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? "auto"
+            : "smooth",
+          block: "nearest",
+        }),
+      );
+    }
+  };
 
   return (
     <>
@@ -239,7 +327,8 @@ function Today() {
             settingsQuery.isError ||
             habitsQuery.isError ||
             logsQuery.isError ||
-            achievementsQuery.isError) && (
+            achievementsQuery.isError ||
+            xpQuery.isError) && (
             <DatabaseErrorNotice
               title="Today’s progress could not be fully loaded"
               error={
@@ -247,7 +336,8 @@ function Today() {
                 settingsQuery.error ??
                 habitsQuery.error ??
                 logsQuery.error ??
-                achievementsQuery.error
+                achievementsQuery.error ??
+                xpQuery.error
               }
               onRetry={() => {
                 void Promise.all([
@@ -256,6 +346,7 @@ function Today() {
                   habitsQuery.refetch(),
                   logsQuery.refetch(),
                   achievementsQuery.refetch(),
+                  xpQuery.refetch(),
                 ]);
               }}
             />
@@ -264,7 +355,8 @@ function Today() {
           logsQuery.isLoading ||
           sessionsQuery.isLoading ||
           settingsQuery.isLoading ||
-          achievementsQuery.isLoading ? (
+          achievementsQuery.isLoading ||
+          xpQuery.isLoading ? (
             <div aria-label="Loading today’s habits" className="space-y-3">
               <div className="h-36 animate-pulse rounded-3xl border bg-cell/70" />
               {Array.from({ length: 3 }, (_, index) => (
@@ -273,22 +365,74 @@ function Today() {
             </div>
           ) : (
             <>
-              <section className="relative overflow-hidden rounded-[var(--radius-card)] border bg-surface p-5 shadow-[var(--shadow-card)]">
+              <section
+                className={`relative overflow-hidden rounded-[var(--radius-card)] border bg-surface p-5 shadow-[var(--shadow-card)] ${
+                  celebrationDay === todayKeyStr ? "today-completion-glow" : ""
+                }`}
+              >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-muted-foreground">Today · {date}</p>
-                    <p
-                      key={completedToday}
-                      className="number-tick mt-1 font-sans text-4xl font-bold leading-none tracking-[-0.04em] text-foreground tabular-nums"
-                    >
-                      {completedToday}/{scheduledHabits.length}
-                    </p>
+                    <h1 className="mt-1 text-2xl font-bold tracking-tight">
+                      {allHabitsDone
+                        ? COPY.today.progress.allDone
+                        : `${greeting}${firstName ? `, ${firstName}` : ""}`}
+                    </h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                      {completionRate}% done · {progressNote}
+                      {countedHabits.length
+                        ? COPY.today.waiting(waitingCount)
+                        : COPY.today.progress.noneScheduled}
                     </p>
+                    <p className="mt-1 text-sm font-medium text-primary">{progressNote}</p>
                   </div>
-                  <div className="flex items-center justify-between gap-3 rounded-[18px] bg-primary/10 px-4 py-3 sm:min-w-[190px] sm:justify-center">
-                    <Flame className="size-5 shrink-0 text-primary" />
+                  <div
+                    className="relative flex size-24 shrink-0 items-center justify-center self-center sm:size-28"
+                    role="progressbar"
+                    aria-label="Today's habit completion"
+                    aria-valuenow={completionRate}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 80 80" className="size-full -rotate-90">
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="34"
+                        fill="none"
+                        stroke="var(--cell)"
+                        strokeWidth="7"
+                      />
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="34"
+                        fill="none"
+                        stroke="var(--primary)"
+                        strokeWidth="7"
+                        strokeLinecap="round"
+                        strokeDasharray={2 * Math.PI * 34}
+                        strokeDashoffset={(2 * Math.PI * 34 * (100 - completionRate)) / 100}
+                        className="today-progress-ring"
+                      />
+                    </svg>
+                    <span className="absolute font-mono text-sm font-semibold tabular-nums">
+                      {completedToday}/{countedHabits.length}
+                    </span>
+                  </div>
+                  <div
+                    className={`flex items-center justify-between gap-3 rounded-[18px] px-4 py-3 transition-colors duration-200 sm:min-w-[190px] sm:justify-center ${
+                      currentStreak > 0 && completedToday === 0
+                        ? "bg-orange-500/10"
+                        : "bg-primary/10"
+                    }`}
+                  >
+                    <Flame
+                      className={`size-5 shrink-0 ${
+                        currentStreak > 0 && completedToday === 0
+                          ? "text-orange-500"
+                          : "text-primary"
+                      }`}
+                    />
                     <div>
                       <div className="text-xs font-medium text-muted-foreground">
                         Current streak
@@ -299,13 +443,14 @@ function Today() {
                           {currentStreak === 1 ? "day" : "days"}
                         </span>
                       </p>
+                      {currentStreak > 0 && completedToday === 0 && (
+                        <p className="mt-1 text-xs font-medium text-orange-600 dark:text-orange-400">
+                          {COPY.today.progress.streakWarning}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
-                <Progress
-                  value={completionRate}
-                  className="relative mt-4 h-2 rounded-full bg-cell"
-                />
                 {comebackData?.isComeback && !dismissedComeback && (
                   <div className="mt-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
                     <span>Welcome back after {comebackData.daysInactive} days away.</span>
@@ -323,20 +468,9 @@ function Today() {
                 )}
               </section>
 
-              <section className="pb-20">
+              <section className="today-habits-section pb-20">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-4">
-                    <h2 className="text-lg font-semibold">Habits</h2>
-                    <Link
-                      to="/habits"
-                      viewTransition
-                      preload="intent"
-                      preloadDelay={0}
-                      className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-                    >
-                      Manage
-                    </Link>
-                  </div>
+                  <h2 className="text-lg font-semibold">Habits</h2>
                   <Button
                     type="button"
                     className="min-h-10 shrink-0 bg-primary text-primary-foreground hover:bg-[var(--primary-hover)]"
@@ -346,16 +480,27 @@ function Today() {
                   </Button>
                 </div>
 
-                {scheduledHabits.length === 0 ? (
-                  <p className="py-3 text-sm text-muted-foreground">Nothing scheduled today.</p>
+                {habits.length === 0 ? (
+                  <div className="today-habit-list-host py-1">
+                    <HabitList
+                      showGrid={false}
+                      todayOnly
+                      onCreateHabit={() => setNewHabitOpen(true)}
+                    />
+                  </div>
+                ) : scheduledHabits.length === 0 ? (
+                  <p className="py-3 text-sm text-muted-foreground">
+                    {COPY.today.progress.noneScheduled}
+                  </p>
                 ) : (
-                  <div className="py-1">
+                  <div className="today-habit-list-host py-1">
                     <HabitList
                       showGrid={false}
                       todayOnly
                       selectableTimed
                       selectedHabitId={selectedTimedHabitId}
-                      onSelectHabit={setSelectedTimedHabitId}
+                      onSelectHabit={selectTimedHabit}
+                      onCreateHabit={() => setNewHabitOpen(true)}
                     />
                   </div>
                 )}
@@ -460,20 +605,20 @@ function Today() {
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="text-muted-foreground">Pomodoro sessions</span>
                   <span className="font-semibold">
-                    {pomodorosToday} · {formatMinutes(pomodoroMinutesToday)}
+                    {pomodorosToday} · {formatMinutes(focusMinutesToday)}
                   </span>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-muted-foreground">Focus plan</span>
-                    <span className="font-semibold tabular-nums">
-                      {dailyGoal > 0
-                        ? `${formatMinutes(focusPlan.completedMinutes)} / ${formatMinutes(dailyGoal)}`
-                        : "No focus goal"}
-                    </span>
+                {focusPlan.plannedMinutes > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">Focus plan</span>
+                      <span className="font-semibold tabular-nums">
+                        {formatMinutes(focusPlan.completedMinutes)} / {formatMinutes(dailyGoal)}
+                      </span>
+                    </div>
+                    <Progress value={focusPlan.percentage} className="h-2" />
                   </div>
-                  <Progress value={focusPlan.percentage} className="h-2" />
-                </div>
+                )}
               </div>
             </section>
 
@@ -486,9 +631,17 @@ function Today() {
                   onClick={() => setAchievementOpen((open) => !open)}
                   className="flex min-h-11 w-full items-center justify-between gap-3 text-left"
                 >
-                  <span className="flex items-center gap-2 font-semibold">
-                    <Trophy className="size-4 text-primary" />
-                    Next achievement
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Trophy className="size-4 shrink-0 text-primary" />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Next achievement
+                      </span>
+                      <span className="truncate text-sm font-semibold">{nextAchievement.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {nextAchievement.progress.label}
+                      </span>
+                    </span>
                   </span>
                   <ChevronDown
                     aria-hidden="true"
@@ -498,14 +651,17 @@ function Today() {
                 <div
                   id="next-achievement-content"
                   hidden={!achievementOpen}
-                  className="flex items-center gap-3 pt-2"
+                  className="space-y-2 pt-2"
                 >
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {nextAchievement.name}
-                  </p>
-                  <span className="shrink-0 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                    +{nextAchievement.reward_xp} XP
-                  </span>
+                  <Progress value={nextAchievement.progress.percentage} className="h-2" />
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {nextAchievement.description}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-primary/10 px-3 py-1 font-semibold text-primary">
+                      +{nextAchievement.reward_xp} XP
+                    </span>
+                  </div>
                 </div>
               </section>
             )}

@@ -21,7 +21,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { GamificationFeedback, XpProgressCard } from "@/components/progress-widgets";
-import { useSettings } from "@/lib/data";
+import { useSettings, useSocialOverview } from "@/lib/data";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,6 +64,7 @@ function AppLayout() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [userLabel, setUserLabel] = useState("Your account");
+  const socialQuery = useSocialOverview();
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
@@ -78,6 +79,7 @@ function AppLayout() {
   }, [navigate]);
   // Loading settings also syncs the browser timezone to the server (XP and streak days).
   useSettings();
+  const accountLabel = socialQuery.data?.profile.display_name.trim() || userLabel;
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const supportsViewTransitions =
     typeof document !== "undefined" && "startViewTransition" in document;
@@ -139,34 +141,38 @@ function AppLayout() {
               <Trophy className="size-5" />
             </Link>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label="Open account menu"
-                className="mx-auto mt-3 flex size-11 shrink-0 items-center justify-center rounded-full border bg-surface text-sm font-semibold text-primary shadow-sm transition-colors duration-150 hover:bg-primary/5 min-[1100px]:w-full min-[1100px]:justify-start min-[1100px]:gap-3 min-[1100px]:rounded-xl min-[1100px]:px-2"
-              >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                  {userLabel === "Your account" ? (
-                    <UserRound className="size-5" />
-                  ) : (
-                    userLabel[0]?.toUpperCase()
-                  )}
-                </span>
-                <span className="hidden min-w-0 truncate min-[1100px]:inline">{userLabel}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 rounded-2xl">
-              <DropdownMenuLabel className="truncate">{userLabel}</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => void navigate({ to: "/profile" })}>
-                <Settings /> Profile and settings
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void signOut()}>
-                <LogOut /> Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="mt-auto pt-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Open account menu"
+                  className="mx-auto flex size-11 shrink-0 items-center justify-center rounded-full border bg-surface text-sm font-semibold text-primary shadow-sm transition-colors duration-150 hover:bg-primary/5 min-[1100px]:w-full min-[1100px]:justify-start min-[1100px]:gap-3 min-[1100px]:rounded-xl min-[1100px]:px-2"
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                    {accountLabel === "Your account" ? (
+                      <UserRound className="size-5" />
+                    ) : (
+                      accountLabel[0]?.toUpperCase()
+                    )}
+                  </span>
+                  <span className="hidden min-w-0 truncate min-[1100px]:inline">
+                    {accountLabel}
+                  </span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56 rounded-2xl">
+                <DropdownMenuLabel className="truncate">{accountLabel}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => void navigate({ to: "/profile" })}>
+                  <Settings /> Profile and settings
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void signOut()}>
+                  <LogOut /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </aside>
       <div className="min-w-0 min-[768px]:col-start-2">

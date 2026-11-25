@@ -572,6 +572,7 @@ export type HabitSchedule = {
   start_date?: string | null;
   end_date?: string | null;
   created_at?: string | null;
+  skipped_dates?: string[] | null;
 };
 
 export function isHabitScheduledOnDay(habit: HabitSchedule, day: string): boolean {
@@ -599,6 +600,10 @@ export function scheduledStreakStats(
   for (let offset = 0; offset < 366; offset++) {
     const key = localDayKey(cursor);
     if (isHabitScheduledOnDay(habit, key)) {
+      if (habit.skipped_dates?.includes(key)) {
+        cursor.setDate(cursor.getDate() - 1);
+        continue;
+      }
       if (!completed.has(key)) break;
       current++;
     }
@@ -614,6 +619,7 @@ export function scheduledStreakStats(
   for (const date = new Date(first); date <= last; date.setDate(date.getDate() + 1)) {
     const key = localDayKey(date);
     if (!isHabitScheduledOnDay(habit, key)) continue;
+    if (habit.skipped_dates?.includes(key)) continue;
     if (completed.has(key)) {
       run++;
       longest = Math.max(longest, run);

@@ -1,0 +1,67 @@
+export const COPY = {
+  errors: {
+    saveFailed: "Saqlab bo'lmadi, qayta urinib ko'ring",
+    completionWindow: "Bu habitni faqat 30 soat ichida o‘zgartirish mumkin.",
+  },
+  toast: {
+    completed: "Bajarildi",
+    undo: "Bekor qilish",
+    skipped: "O'tkazib yuborildi",
+    saveFailed: "Saqlab bo'lmadi, qayta urinib ko'ring",
+  },
+  today: {
+    morning: "Xayrli tong",
+    afternoon: "Xayrli kun",
+    evening: "Xayrli kech",
+    waiting: (count: number) => `${count} ta habit sizni kutyapti. Birinchisidan boshlaymizmi?`,
+    progress: {
+      start: "Boshlaymiz",
+      beginning: "Yaxshi boshlanish",
+      halfway: "Yarmidan oshdingiz",
+      complete: "Ajoyib kun!",
+      allDone: "Bugun hammasi bajarildi 🎉",
+      streakWarning: "Bugun bajaring, streak uzilmasin",
+      noneScheduled: "Bugun rejalashtirilgan habit yo'q.",
+    },
+  },
+  habits: {
+    completed: (count: number) => `Bajarilganlar (${count})`,
+    firstTitle: "Birinchi habitni qo‘shing",
+    noScheduled: "Bugun rejalashtirilgan habit yo'q.",
+    preview: "Ko‘rinishi",
+    placeholderName: "Yangi habit",
+    menu: "Habit amallari",
+    edit: "Tahrirlash",
+    skip: "Bugunni o'tkazib yuborish",
+    delete: "O'chirish",
+    skipped: "O'tkazib yuborilgan",
+    emptySubtitle: "Kichik qadamdan boshlang va odatlaringizni birma-bir yarating.",
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    weekdayInitials: ["M", "T", "W", "T", "F", "S", "S"],
+    timer: (name: string) => `Select ${name} for the focus timer`,
+    check: (name: string, done: boolean) => `Mark ${name} ${done ? "not done" : "done"}`,
+    duration: (minutes: number) =>
+      minutes >= 60
+        ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`
+        : `${minutes}m`,
+    durationOptions: ["21 kun", "30 kun", "65 kun", "90 kun", "Maxsus"],
+    chooseDuration: "Habit davomiyligini tanlang.",
+    chooseStartDate: "Boshlanish sanasini tanlang.",
+    chooseEndDate: "Tugash sanasini tanlang.",
+    invalidEndDate: "Tugash sanasi boshlanish sanasidan oldin bo'lishi mumkin emas.",
+    durationPreview: (days: number, endDate: string) => `${days} kun · ${endDate} gacha`,
+  },
+  stats: {
+    week: (percentage: number) => `Bu hafta ${percentage}% bajarildi`,
+    weeklyCompletion: "Haftalik bajarilish",
+    weekComparison: (current: number, previous: number, change: number) =>
+      `Bu hafta ${current}% · o'tgan hafta ${previous}% (${change > 0 ? "+" : ""}${change} foiz punkt)`,
+    bestDay: "Eng yaxshi kuningiz",
+    mostMissed: "Eng ko‘p o‘tkazib yuborilgan",
+    bestWeekday: "Eng yaxshi hafta kuni",
+    noScheduledData: "Rejalashtirilgan odatlar yo'q",
+    noMissedHabits: "Bu hafta bajarilmagan odat yo'q.",
+    missedCount: (count: number) => `${count} kun bajarilmadi`,
+    weekdays: ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"],
+  },
+} as const;

@@ -30,6 +30,7 @@ import {
 } from "@/lib/data";
 import { toast } from "sonner";
 import { downloadTextFile, habitLogsToCsv, sessionsToCsv } from "@/lib/export";
+import { showFriendlyError } from "@/lib/feedback";
 
 declare global {
   interface Window {
@@ -90,14 +91,14 @@ function Profile() {
       await supabase.auth.signOut();
       navigate({ to: "/auth", replace: true });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not sign out.");
+      showFriendlyError(error);
     }
   };
 
   useEffect(() => {
     let active = true;
     supabase.auth.getUser().then(({ data, error }) => {
-      if (error) toast.error(error.message);
+      if (error) showFriendlyError(error);
       if (active) setEmail(data.user?.email ?? "");
     });
     const storedTheme = localStorage.getItem("balance-theme");
@@ -150,7 +151,7 @@ function Profile() {
       await saveSettings.mutateAsync({ reminder_enabled: true });
       toast.success("Background reminders enabled");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not enable push reminders.");
+      showFriendlyError(error);
     }
   };
 

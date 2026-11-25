@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
+import { friendlyErrorMessage, showFriendlyError } from "@/lib/feedback";
 import { Eye, EyeOff } from "lucide-react";
 
 export const Route = createFileRoute("/auth")({
@@ -92,7 +93,7 @@ function AuthPage() {
           options: { emailRedirectTo: `${window.location.origin}/auth` },
         });
         if (error) {
-          toast.error(error.message);
+          showFriendlyError(error);
         } else if (data.session) {
           toast.success("Account created. You are signed in.");
         } else {
@@ -103,10 +104,10 @@ function AuthPage() {
           email: email.trim(),
           password,
         });
-        if (error) toast.error(error.message);
+        if (error) showFriendlyError(error);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not authenticate.");
+      showFriendlyError(error);
     } finally {
       setBusy(false);
     }
@@ -124,9 +125,9 @@ function AuthPage() {
       });
       if (error) throw error;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not sign in with Google.";
+      const message = friendlyErrorMessage(error);
       setGoogleError(message);
-      toast.error("Google sign-in failed", { description: message });
+      toast.error(message);
     } finally {
       setGoogleBusy(false);
     }

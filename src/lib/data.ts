@@ -4,6 +4,7 @@ import type { Database, Json } from "@/integrations/supabase/types";
 import type { SocialOverview } from "@/lib/social-types";
 import { ACHIEVEMENTS, scheduledStreakStats, xpRewardsForCompletion } from "@/lib/gamification";
 import { toast } from "sonner";
+import { showFriendlyError } from "@/lib/feedback";
 
 /** Colors offered in the picker. Old habits may still use the legacy colors below. */
 export const HABIT_COLORS = [
@@ -98,56 +99,7 @@ export const HABIT_COLOR_VALUES: Record<string, string> = {
   stone: "#a8a29e",
 };
 
-function mutationErrorMessage(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const record = error as {
-      code?: string;
-      message?: string;
-      details?: string;
-      hint?: string;
-      status?: number;
-    };
-    console.error("Habit Balance mutation failed", record);
-
-    if (record.code === "23505") {
-      if (/name|habit/i.test(`${record.message} ${record.details}`)) {
-        return "A habit with this name already exists.";
-      }
-      return "That habit already exists.";
-    }
-    if (record.code === "23514") {
-      if (/color/i.test(`${record.message} ${record.details}`)) {
-        return "This color is not allowed.";
-      }
-      if (/category/i.test(`${record.message} ${record.details}`)) {
-        return "This category is not allowed.";
-      }
-      if (/icon/i.test(`${record.message} ${record.details}`)) {
-        return "This icon is not allowed.";
-      }
-      if (/daily_goal/i.test(`${record.message} ${record.details}`)) {
-        return "Enter a valid daily focus goal.";
-      }
-      return "One of the habit values is not valid.";
-    }
-    if (record.code === "42501" || record.status === 401 || record.status === 403) {
-      return "You do not have permission to save this habit.";
-    }
-    if (/maximum|limit|too many/i.test(`${record.message} ${record.details}`)) {
-      return record.message || "This habit cannot be added because a limit was reached.";
-    }
-  }
-  console.error("Habit Balance mutation failed", error);
-  if (
-    error instanceof Error &&
-    error.message === "Habit entries can only be changed within 30 hours."
-  ) {
-    return error.message;
-  }
-  return "Could not save. Please try again.";
-}
-
-const err = (error: unknown) => toast.error(mutationErrorMessage(error));
+const err = (error: unknown) => showFriendlyError(error);
 
 export function useSocialOverview() {
   return useQuery({
@@ -602,6 +554,65 @@ export function useUpdateHabit() {
   });
 }
 
+export function useSkipHabitDay() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (value: { habitId: string; day: string; skip: boolean }) => {
+      const currentHabits =
+        qc.getQueryData<Database["public"]["Tables"]["habits"]["Row"][]>(["habits"]) ?? [];
+      const habit = currentHabits.find((item) => item.id === value.habitId);
+      if (!habit) throw new Error("Habit is unavailable.");
+      const skippedDates = habit.skipped_dates ?? [];
+      const nextDates = value.skip
+        ? [...new Set([...skippedDates, value.day])].sort()
+        : skippedDates.filter((day) => day !== value.day);
+      const { error } = await supabase
+        .from("habits")
+        .update({ skipped_dates: nextDates })
+        .eq("id", value.habitId);
+      if (error) throw error;
+    },
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: ["habits"] });
+      const previousHabits = qc.getQueryData<Database["public"]["Tables"]["habits"]["Row"][]>([
+        "habits",
+      ]);
+      const previousDates = previousHabits?.find(
+        (habit) => habit.id === value.habitId,
+      )?.skipped_dates;
+      if (previousHabits) {
+        qc.setQueryData(
+          ["habits"],
+          previousHabits.map((habit) => {
+            if (habit.id !== value.habitId) return habit;
+            const skippedDates = habit.skipped_dates ?? [];
+            return {
+              ...habit,
+              skipped_dates: value.skip
+                ? [...new Set([...skippedDates, value.day])].sort()
+                : skippedDates.filter((day) => day !== value.day),
+            };
+          }),
+        );
+      }
+      return { previousDates, habitId: value.habitId };
+    },
+    onError: (error, _variables, context) => {
+      if (context?.previousDates) {
+        qc.setQueryData<Database["public"]["Tables"]["habits"]["Row"][]>(["habits"], (current) =>
+          current?.map((habit) =>
+            habit.id === context.habitId
+              ? { ...habit, skipped_dates: context.previousDates! }
+              : habit,
+          ),
+        );
+      }
+      err(error);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["habits"] }),
+  });
+}
+
 export function useSetAchievementFeatured() {
   const qc = useQueryClient();
   return useMutation({
@@ -808,14 +819,19 @@ export function useToggleLog() {
         );
       }
 
-      return { previousLog, optimisticXp, day: v.day };
+      return { previousLog, optimisticXp, day: v.day, reachesGoal };
     },
 
-    onSuccess: (result, _variables, context) => {
+    onSuccess: (result, variables, context) => {
       const correction = result.totalDelta - (context?.optimisticXp ?? 0);
       if (correction !== 0) {
         qc.setQueryData<{ totalXp: number; transactions: unknown[] }>(["xp"], (current) =>
           current ? { ...current, totalXp: Math.max(0, current.totalXp + correction) } : current,
+        );
+      }
+      if (context?.reachesGoal && typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("balance-habit-completion-confirmed", { detail: variables.day }),
         );
       }
     },
@@ -861,7 +877,6 @@ export function useToggleLog() {
           );
         }
       }
-      qc.invalidateQueries({ queryKey: ["habit_logs"] });
       err(e);
     },
   });

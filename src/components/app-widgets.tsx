@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   Check,
@@ -10,6 +10,9 @@ import {
   RotateCcw,
   Settings,
   ChevronDown,
+  MoreHorizontal,
+  Flame,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +39,7 @@ import {
   useTimer,
   useToggleLog,
   useUpdateHabit,
+  useSkipHabitDay,
   DEFAULT_SETTINGS,
   type AppSettings,
 } from "@/lib/data";
@@ -49,10 +53,12 @@ import {
   getTodayHabits,
   getWeekDayKeys,
   getWeekStrip,
+  getTimedHabitCompletionCandidates,
+  isHabitSkippedOnDay,
   isTimedHabit,
-  type DayState,
 } from "@/lib/today";
 import { HabitFormDialog } from "@/components/habit-form-dialog";
+import { HabitCardContent } from "@/components/habit-card-content";
 import {
   TimerSettingsPanel,
   type TimerPreferences,
@@ -60,6 +66,15 @@ import {
 } from "@/components/timer-settings-panel";
 import { playSound } from "@/lib/sounds";
 import { playOptionalSound, vibrate } from "@/lib/haptics";
+import { COPY } from "@/lib/strings";
+import { showUndoToast } from "@/lib/feedback";
+import { dismissUndoToast } from "@/lib/feedback";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Database } from "@/integrations/supabase/types";
 
 type Habit = Database["public"]["Tables"]["habits"]["Row"];
@@ -911,73 +926,19 @@ export function SessionList() {
 
 export type HabitStatusFilter = "active" | "paused";
 
-const WEEK_STATE_LABELS: Record<DayState, string> = {
-  done: "completed",
-  missed: "missed",
-  pending: "not completed yet",
-  future: "upcoming",
-  off: "not scheduled",
-};
-
-function HabitWeekStrip({
-  habitName,
-  dayKeys,
-  states,
-}: {
-  habitName: string;
-  dayKeys: string[];
-  states: DayState[];
-}) {
-  const scheduledDays = states.filter((state) => state !== "off").length;
-  const completedDays = states.filter((state) => state === "done").length;
-  const accessibleSummary = dayKeys
-    .map((day, index) => {
-      const state = states[index];
-      return `${new Date(`${day}T12:00:00`).toLocaleDateString([], {
-        weekday: "long",
-      })}: ${state ? WEEK_STATE_LABELS[state] : "unknown"}`;
-    })
-    .join(". ");
-
+function HabitWeekHeader() {
   return (
-    <div
-      role="img"
-      aria-label={`${habitName}: ${completedDays} of ${scheduledDays} planned days completed this week. ${accessibleSummary}`}
-      className="flex items-center justify-between gap-1"
-    >
-      {dayKeys.map((day, index) => {
-        const state = states[index] ?? "off";
-        const dateLabel = new Date(`${day}T12:00:00`).toLocaleDateString([], {
-          weekday: "short",
-        });
-        return (
-          <span key={day} className="flex min-w-0 flex-col items-center gap-1">
-            <span className="text-[13px] leading-4 font-medium text-[var(--text-secondary)]">
-              {dateLabel}
-            </span>
-            {state === "off" ? (
-              <span aria-hidden="true" className="text-xs leading-4 text-muted-foreground">
-                -
-              </span>
-            ) : (
-              <span
-                aria-hidden="true"
-                title={`${dateLabel}: ${WEEK_STATE_LABELS[state]}`}
-                className={cn(
-                  "flex size-4 items-center justify-center rounded-full border",
-                  state === "done" && "border-primary bg-primary text-primary-foreground",
-                  state === "missed" && "border-border bg-muted/60 text-muted-foreground",
-                  state === "pending" && "border-primary bg-surface",
-                  state === "future" && "border-dashed border-border/70 bg-transparent",
-                )}
-              >
-                {state === "done" && <Check className="size-2.5" />}
-                {state === "missed" && <span className="text-[10px] leading-none">-</span>}
-              </span>
-            )}
+    <div className="grid grid-cols-[2.25rem_minmax(0,1fr)_8.5rem] items-center gap-3 px-3">
+      <span />
+      <div className="grid w-full max-w-[140px] grid-cols-7 gap-1 text-center text-[10px] font-medium text-muted-foreground">
+        {COPY.habits.weekdays.map((full, index) => (
+          <span key={`${full}-${index}`} aria-label={full}>
+            <span className="hidden min-[400px]:inline">{full}</span>
+            <span className="min-[400px]:hidden">{COPY.habits.weekdayInitials[index]}</span>
           </span>
-        );
-      })}
+        ))}
+      </div>
+      <span />
     </div>
   );
 }
@@ -989,6 +950,7 @@ export function HabitList({
   selectableTimed = false,
   selectedHabitId = "",
   onSelectHabit,
+  onCreateHabit,
 }: {
   showGrid?: boolean;
   statusFilter?: HabitStatusFilter;
@@ -996,8 +958,9 @@ export function HabitList({
   selectableTimed?: boolean;
   selectedHabitId?: string;
   onSelectHabit?: (habitId: string) => void;
+  onCreateHabit?: () => void;
 }) {
-  const now = useNow(30000);
+  const now = useNow(1000);
   const {
     data: habits = [],
     error: habitsError,
@@ -1009,24 +972,24 @@ export function HabitList({
     data: logs = [],
     error: logsError,
     isError: hasLogsError,
+    isLoading: isLogsLoading,
     refetch: refetchLogs,
   } = useHabitLogs();
   const {
     data: sessions = [],
     error: sessionsError,
     isError: hasSessionsError,
+    isLoading: isSessionsLoading,
     refetch: refetchSessions,
   } = useSessions();
   const toggle = useToggleLog();
+  const skipDay = useSkipHabitDay();
   const del = useDeleteHabit();
   const updateHabit = useUpdateHabit();
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
   const [deletingHabit, setDeletingHabit] = useState<Habit | null>(null);
   const [deletingHabitId, setDeletingHabitId] = useState<string | null>(null);
   const expandedHabitId = useRef<string | null>(null);
-  const [heldCompletedHabits, setHeldCompletedHabits] = useState<Set<string>>(() => new Set());
-  const heldCompletedHabitsRef = useRef(new Set<string>());
-  const reorderTimer = useRef<number | null>(null);
   const reorderElements = useRef(new Map<string, HTMLLIElement>());
   const previousCardTops = useRef(new Map<string, number>());
   const animateNextReorder = useRef(false);
@@ -1038,6 +1001,7 @@ export function HabitList({
     previousCount?: number;
     optimisticCount?: number;
     previousCompletedAt?: string | null;
+    skipped?: boolean;
     message: string;
     key: number;
   } | null>(null);
@@ -1049,6 +1013,9 @@ export function HabitList({
   } | null>(null);
   const feedbackKey = useRef(0);
   const toggleLocks = useRef(new Set<string>());
+  const autoCompletionAttempts = useRef(new Set<string>());
+  const touchStarts = useRef(new Map<string, { x: number; y: number; time: number }>());
+  const suppressTouchClick = useRef(false);
   const today = dayKey(now);
   const weekDays = getWeekDayKeys(now);
   const logsByHabitDay = useMemo(
@@ -1089,31 +1056,12 @@ export function HabitList({
   );
 
   const holdCompletedCard = (habitId: string) => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const next = new Set(heldCompletedHabitsRef.current);
-    next.add(habitId);
-    heldCompletedHabitsRef.current = next;
-    setHeldCompletedHabits(next);
-    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current);
-    reorderTimer.current = window.setTimeout(() => {
-      reorderTimer.current = null;
-      if (!heldCompletedHabitsRef.current.size) return;
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
       animateNextReorder.current = true;
-      heldCompletedHabitsRef.current = new Set();
-      setHeldCompletedHabits(new Set());
-    }, 700);
   };
 
-  const cancelHeldCompletion = (habitId: string) => {
-    if (!heldCompletedHabitsRef.current.has(habitId)) return;
-    const next = new Set(heldCompletedHabitsRef.current);
-    next.delete(habitId);
-    heldCompletedHabitsRef.current = next;
-    setHeldCompletedHabits(next);
-    if (!next.size && reorderTimer.current !== null) {
-      window.clearTimeout(reorderTimer.current);
-      reorderTimer.current = null;
-    }
+  const cancelHeldCompletion = (_habitId: string) => {
+    animateNextReorder.current = false;
   };
 
   const toggleExpandedHabit = (habitId: string) => {
@@ -1138,21 +1086,28 @@ export function HabitList({
     }
   };
 
-  const visibleHabits = habits
-    .filter((habit) => {
-      if (todayOnly && !scheduledTodayIds.has(habit.id)) return false;
-      if (statusFilter === "active" && habit.is_paused) return false;
-      if (statusFilter === "paused" && !habit.is_paused) return false;
-      return true;
-    })
-    .sort((left, right) => {
-      if (todayOnly) {
-        const leftDone = done.has(`${left.id}|${today}`) && !heldCompletedHabits.has(left.id);
-        const rightDone = done.has(`${right.id}|${today}`) && !heldCompletedHabits.has(right.id);
-        if (leftDone !== rightDone) return leftDone ? 1 : -1;
-      }
-      return left.created_at.localeCompare(right.created_at);
-    });
+  const visibleHabits = useMemo(
+    () =>
+      habits
+        .filter((habit) => {
+          if (todayOnly && !scheduledTodayIds.has(habit.id)) return false;
+          if (statusFilter === "active" && habit.is_paused) return false;
+          if (statusFilter === "paused" && !habit.is_paused) return false;
+          return true;
+        })
+        .sort((left, right) => {
+          if (todayOnly) {
+            const rank = (habit: Habit) => {
+              if (isHabitSkippedOnDay(habit, today) && !done.has(`${habit.id}|${today}`)) return 2;
+              return done.has(`${habit.id}|${today}`) ? 1 : 0;
+            };
+            const difference = rank(left) - rank(right);
+            if (difference) return difference;
+          }
+          return left.created_at.localeCompare(right.created_at);
+        }),
+    [done, habits, scheduledTodayIds, statusFilter, today, todayOnly],
+  );
 
   useLayoutEffect(() => {
     const currentTops = new Map<string, number>();
@@ -1177,7 +1132,7 @@ export function HabitList({
         reorderFrame.current = window.requestAnimationFrame(() => {
           for (const element of reorderElements.current.values()) {
             if (!element.style.transform) continue;
-            element.style.transition = "transform 320ms ease-in-out";
+            element.style.transition = "transform 200ms ease-out";
             element.style.transform = "translateY(0)";
             element.addEventListener(
               "transitionend",
@@ -1198,7 +1153,6 @@ export function HabitList({
 
   useEffect(
     () => () => {
-      if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current);
       if (reorderFrame.current !== null) window.cancelAnimationFrame(reorderFrame.current);
     },
     [],
@@ -1255,6 +1209,126 @@ export function HabitList({
     });
   };
 
+  const toggleHabitCompletion = (habit: Habit, isDone: boolean) => {
+    const habitId = habit.id;
+    if (toggleLocks.current.has(habitId)) return;
+    toggleLocks.current.add(habitId);
+
+    const toggleLog = (currentlyDone: boolean) => {
+      if (currentlyDone) cancelHeldCompletion(habitId);
+      else holdCompletedCard(habitId);
+      vibrate(10);
+      const actionKey = ++feedbackKey.current;
+      const action = {
+        habitId,
+        previousDone: currentlyDone,
+        previousCompletedAt: completionTimeByHabitDay.get(`${habitId}|${today}`) ?? null,
+        message: currentlyDone ? "Marked not done." : COPY.toast.completed,
+        key: actionKey,
+      };
+
+      setUndoAction(currentlyDone ? null : action);
+      if (currentlyDone) dismissUndoToast();
+      else {
+        playOptionalSound("habit-complete");
+        showOptimisticXpFeedback(habitId);
+        showUndoToast(COPY.toast.completed, () => undoCompletion(action));
+      }
+
+      toggle.mutate(
+        {
+          habit_id: habitId,
+          day: today,
+          done: currentlyDone,
+          completed_at: completionTimeByHabitDay.get(`${habitId}|${today}`) ?? null,
+        },
+        {
+          onSuccess: (result) => {
+            toggleLocks.current.delete(habitId);
+            showXpFeedback(habitId, result, !currentlyDone);
+          },
+          onError: () => {
+            toggleLocks.current.delete(habitId);
+            if (!currentlyDone) {
+              cancelHeldCompletion(habitId);
+              dismissUndoToast();
+              setUndoAction((current) => (current?.key === actionKey ? null : current));
+            }
+            setXpFeedback((current) => (current?.habitId === habitId ? null : current));
+          },
+        },
+      );
+    };
+
+    if (isHabitSkippedOnDay(habit, today)) {
+      skipDay.mutate({ habitId, day: today, skip: false }, { onSuccess: () => toggleLog(isDone) });
+    } else {
+      toggleLog(isDone);
+    }
+  };
+
+  const toggleHabitCompletionRef = useRef(toggleHabitCompletion);
+  toggleHabitCompletionRef.current = toggleHabitCompletion;
+
+  useEffect(() => {
+    if (
+      isLoading ||
+      isLogsLoading ||
+      isSessionsLoading ||
+      hasHabitsError ||
+      hasLogsError ||
+      hasSessionsError
+    )
+      return;
+    const candidates = getTimedHabitCompletionCandidates(habits, timeByHabit, done, today);
+    for (const habit of candidates) {
+      const key = `${habit.id}|${today}`;
+      if (autoCompletionAttempts.current.has(key) || toggleLocks.current.has(habit.id)) continue;
+      autoCompletionAttempts.current.add(key);
+      toggleHabitCompletionRef.current(habit, false);
+    }
+  }, [
+    done,
+    habits,
+    hasHabitsError,
+    hasLogsError,
+    hasSessionsError,
+    isLoading,
+    isLogsLoading,
+    isSessionsLoading,
+    timeByHabit,
+    today,
+  ]);
+
+  const skipHabitToday = (habit: Habit) => {
+    if (done.has(`${habit.id}|${today}`) || isHabitSkippedOnDay(habit, today)) return;
+    if (toggleLocks.current.has(habit.id)) return;
+    toggleLocks.current.add(habit.id);
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      animateNextReorder.current = true;
+    const action = {
+      habitId: habit.id,
+      previousDone: false,
+      previousCompletedAt: null,
+      skipped: true,
+      message: COPY.toast.skipped,
+      key: ++feedbackKey.current,
+    };
+    setUndoAction(action);
+    showUndoToast(COPY.toast.skipped, () => undoCompletion(action));
+    skipDay.mutate(
+      { habitId: habit.id, day: today, skip: true },
+      {
+        onSuccess: () => toggleLocks.current.delete(habit.id),
+        onError: () => {
+          toggleLocks.current.delete(habit.id);
+          dismissUndoToast();
+          setUndoAction((current) => (current?.key === action.key ? null : current));
+        },
+      },
+    );
+  };
+
   const updateCount = (habitId: string, count: number, nextCount: number, goal: number) => {
     const actionKey = ++feedbackKey.current;
     const completesHabit = count < goal && nextCount >= goal;
@@ -1269,6 +1343,18 @@ export function HabitList({
       key: actionKey,
     });
     if (completesHabit) showOptimisticXpFeedback(habitId);
+    if (completesHabit) {
+      showUndoToast(COPY.toast.completed, () =>
+        undoCompletion({
+          habitId,
+          previousCount: count,
+          optimisticCount: nextCount,
+          previousCompletedAt: completionTimeByHabitDay.get(`${habitId}|${today}`) ?? null,
+          message: COPY.toast.completed,
+          key: actionKey,
+        }),
+      );
+    }
     toggle.mutate(
       {
         habit_id: habitId,
@@ -1291,11 +1377,17 @@ export function HabitList({
     );
   };
 
-  const undoCompletion = () => {
-    if (!undoAction) return;
-    const action = undoAction;
+  const undoCompletion = (actionOverride?: NonNullable<typeof undoAction>) => {
+    const action = actionOverride ?? undoAction;
+    if (!action) return;
     cancelHeldCompletion(action.habitId);
-    setUndoAction(null);
+    dismissUndoToast();
+    setUndoAction((current) => (current?.key === action.key ? null : current));
+    if (action.skipped) {
+      skipDay.mutate({ habitId: action.habitId, day: today, skip: false });
+      return;
+    }
+    if (!action.previousDone) holdCompletedCard(action.habitId);
     toggle.mutate({
       habit_id: action.habitId,
       day: today,
@@ -1329,9 +1421,18 @@ export function HabitList({
     );
   if (!habits.length && statusFilter === "active")
     return (
-      <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-        No habits yet — add your first one.
-      </p>
+      <div className="rounded-3xl border border-dashed p-8 text-center">
+        <HabitBadge icon="sparkles" color="#219B70" className="mx-auto size-12 rounded-2xl" />
+        <h3 className="mt-3 text-lg font-semibold">{COPY.habits.firstTitle}</h3>
+        <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+          {COPY.habits.emptySubtitle}
+        </p>
+        {onCreateHabit && (
+          <Button type="button" className="mt-4 min-h-11 rounded-2xl" onClick={onCreateHabit}>
+            <Plus className="size-4" /> New habit
+          </Button>
+        )}
+      </div>
     );
 
   if (!visibleHabits.length)
@@ -1343,337 +1444,356 @@ export function HabitList({
       </p>
     );
 
+  const completedCount = visibleHabits.filter((habit) => done.has(`${habit.id}|${today}`)).length;
+  const rank = (habit: Habit) => {
+    if (isHabitSkippedOnDay(habit, today) && !done.has(`${habit.id}|${today}`)) return 2;
+    return done.has(`${habit.id}|${today}`) ? 1 : 0;
+  };
+
   return (
     <>
-      <ul ref={listRef} className={cn("grid gap-4", showGrid && "lg:grid-cols-2")}>
-        {visibleHabits.map((h) => {
-          const inactive = h.is_paused || !isHabitScheduledOnDay(h, today);
-          const isFinished = Boolean(h.end_date && today > h.end_date);
-          const isDone = done.has(`${h.id}|${today}`);
-          const minutes = timeByHabit.get(`${h.id}|${today}`) ?? 0;
-          const goal = h.daily_goal_minutes ?? 0;
-          const streak = scheduledStreakStats(daysByHabit.get(h.id) ?? [], today, h);
-          const completedDays = new Set(daysByHabit.get(h.id) ?? []);
-          const weekStrip = getWeekStrip(h, completedDays, now);
-          const canSelect = selectableTimed && isTimedHabit(h) && !inactive;
-          const canExpand = isTimedHabit(h);
-          const isSelected = selectedHabitId === h.id;
-          const isExpanded = canExpand && expandedHabitId.current === h.id;
-          return (
-            <li
-              key={h.id}
-              ref={(element) => {
-                if (element) reorderElements.current.set(h.id, element);
-                else reorderElements.current.delete(h.id);
-              }}
-              onClick={(event) => {
-                if (
-                  !todayOnly ||
-                  !canExpand ||
-                  (event.target instanceof HTMLElement && event.target.closest("button"))
-                )
-                  return;
-                toggleExpandedHabit(h.id);
-              }}
-              className={cn(
-                "relative min-h-[88px] rounded-2xl border bg-surface p-4 shadow-[var(--shadow-card)] transition-[transform,opacity] duration-200 hover:shadow-md",
-                todayOnly && canExpand && "cursor-pointer",
-                isSelected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-                deletingHabitId === h.id && "pointer-events-none scale-[0.98] opacity-0",
-              )}
-            >
-              {xpFeedback?.habitId === h.id && (
-                <span
-                  key={xpFeedback.key}
-                  role="status"
-                  className={`xp-float pointer-events-none absolute right-3 top-1 z-10 rounded-full border bg-surface px-3 py-1 text-xs font-semibold shadow-md ${
-                    xpFeedback.isNegative ? "text-destructive" : "text-primary"
-                  }`}
-                >
-                  {xpFeedback.text}
-                </span>
-              )}
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <HabitBadge
-                    icon={h.icon}
-                    color={h.color}
-                    className="size-9 rounded-xl [&>svg]:size-4"
-                  />
-                  <div className="min-w-0 flex-1">
-                    {canExpand ? (
-                      <button
-                        type="button"
-                        data-habit-expander
-                        aria-expanded={isExpanded}
-                        aria-controls={`habit-details-${h.id}`}
-                        onClick={() => toggleExpandedHabit(h.id)}
-                        className="flex min-h-6 w-full items-center justify-between gap-2 rounded-md text-left"
-                      >
-                        <span
-                          className={cn(
-                            "block truncate text-base font-semibold",
-                            isDone && "text-muted-foreground",
-                          )}
-                        >
-                          {h.name}
-                        </span>
-                        <ChevronDown
-                          aria-hidden="true"
-                          className={cn(
-                            "size-4 shrink-0 text-muted-foreground transition-transform duration-150",
-                            isExpanded && "rotate-180",
-                          )}
-                        />
-                      </button>
-                    ) : (
-                      <span
-                        className={cn(
-                          "block truncate text-base font-semibold",
-                          isDone && "text-muted-foreground",
-                        )}
-                      >
-                        {h.name}
-                      </span>
-                    )}
-                    <span className="block text-[13px] font-medium text-[var(--text-secondary)]">
-                      {h.category} · {h.is_paused ? "Paused" : `${streak.current} day streak`}
-                    </span>
-                    {isFinished && (
-                      <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        Finished
-                      </span>
-                    )}
-                    <div className="mt-2">
-                      <HabitWeekStrip habitName={h.name} dayKeys={weekDays} states={weekStrip} />
-                    </div>
-                  </div>
-                </div>
-                <div
+      <div className={cn(todayOnly && "today-habit-list-scroll")}>
+        {todayOnly && <HabitWeekHeader />}
+        <ul
+          ref={listRef}
+          className={cn("grid gap-2", showGrid && "lg:grid-cols-2", todayOnly && "mt-2")}
+        >
+          {visibleHabits.map((h, index) => {
+            const inactive = h.is_paused || !isHabitScheduledOnDay(h, today);
+            const isFinished = Boolean(h.end_date && today > h.end_date);
+            const isDone = done.has(`${h.id}|${today}`);
+            const isSkipped = isHabitSkippedOnDay(h, today) && !isDone;
+            const minutes = timeByHabit.get(`${h.id}|${today}`) ?? 0;
+            const goal = h.daily_goal_minutes ?? 0;
+            const streak = scheduledStreakStats(daysByHabit.get(h.id) ?? [], today, h);
+            const completedDays = new Set(daysByHabit.get(h.id) ?? []);
+            const weekStrip = getWeekStrip(h, completedDays, now);
+            const canSelect = selectableTimed && isTimedHabit(h) && !inactive;
+            const canExpand = isTimedHabit(h);
+            const isSelected = selectedHabitId === h.id;
+            const isExpanded = canExpand && expandedHabitId.current === h.id;
+            const xpAmount = xpRewardsForCompletion(
+              h.id,
+              today,
+              streak.current + (isDone ? 0 : 1),
+              h.difficulty,
+            ).reduce((total, reward) => total + reward.amount, 0);
+            const previousRank = index > 0 ? rank(visibleHabits[index - 1]!) : -1;
+            return (
+              <Fragment key={h.id}>
+                {todayOnly && rank(h) === 1 && previousRank !== 1 && completedCount > 0 && (
+                  <li className="col-span-full list-none pt-2 text-sm font-semibold text-muted-foreground">
+                    {COPY.habits.completed(completedCount)}
+                  </li>
+                )}
+                {todayOnly && rank(h) === 2 && previousRank !== 2 && (
+                  <li className="col-span-full list-none pt-2 text-sm font-semibold text-muted-foreground">
+                    {COPY.habits.skipped}
+                  </li>
+                )}
+                <li
+                  ref={(element) => {
+                    if (element) reorderElements.current.set(h.id, element);
+                    else reorderElements.current.delete(h.id);
+                  }}
+                  onTouchStart={(event) => {
+                    if (!todayOnly) return;
+                    const touch = event.changedTouches[0];
+                    if (touch)
+                      touchStarts.current.set(h.id, {
+                        x: touch.clientX,
+                        y: touch.clientY,
+                        time: Date.now(),
+                      });
+                  }}
+                  onTouchMove={(event) => {
+                    if (!todayOnly) return;
+                    const start = touchStarts.current.get(h.id);
+                    const touch = event.changedTouches[0];
+                    if (!start || !touch) return;
+                    const dx = touch.clientX - start.x;
+                    const dy = touch.clientY - start.y;
+                    const content =
+                      event.currentTarget.querySelector<HTMLElement>(".habit-swipe-content");
+                    if (!content || Math.abs(dy) > Math.abs(dx) || Math.abs(dx) < 8) return;
+                    content.style.transition = "none";
+                    content.style.transform = `translateX(${Math.max(-120, Math.min(120, dx))}px)`;
+                    event.currentTarget.dataset["swipe"] = dx > 0 ? "complete" : "skip";
+                  }}
+                  onTouchEnd={(event) => {
+                    if (!todayOnly) return;
+                    const card = event.currentTarget;
+                    const start = touchStarts.current.get(h.id);
+                    const touch = event.changedTouches[0];
+                    touchStarts.current.delete(h.id);
+                    if (!start || !touch) return;
+                    const dx = touch.clientX - start.x;
+                    const dy = touch.clientY - start.y;
+                    const duration = Date.now() - start.time;
+                    const fastFlick = Math.abs(dx) >= 55 && duration < 220;
+                    const content =
+                      event.currentTarget.querySelector<HTMLElement>(".habit-swipe-content");
+                    if (content) {
+                      content.style.transition = "transform 150ms ease-out";
+                      content.style.transform = "translateX(0)";
+                    }
+                    window.setTimeout(() => {
+                      delete card.dataset["swipe"];
+                    }, 180);
+                    if (Math.abs(dy) > Math.abs(dx)) return;
+                    if (Math.abs(dx) < event.currentTarget.clientWidth * 0.35 && !fastFlick) return;
+                    event.preventDefault();
+                    suppressTouchClick.current = true;
+                    window.setTimeout(() => {
+                      suppressTouchClick.current = false;
+                    }, 350);
+                    if (dx > 0) toggleHabitCompletion(h, isDone);
+                    else skipHabitToday(h);
+                  }}
+                  onClick={(event) => {
+                    if (
+                      !todayOnly ||
+                      !canExpand ||
+                      (event.target instanceof HTMLElement && event.target.closest("button"))
+                    )
+                      return;
+                    toggleExpandedHabit(h.id);
+                  }}
                   className={cn(
-                    "flex shrink-0 items-center gap-0.5",
-                    showGrid && "rounded-2xl bg-cell/60 p-1",
+                    "relative isolate min-h-[80px] overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-card)] transition-[transform,opacity] duration-200 ease-out hover:shadow-md motion-reduce:transition-none",
+                    todayOnly && canExpand && "cursor-pointer",
+                    isSelected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                    todayOnly && isDone && "opacity-60",
+                    deletingHabitId === h.id && "pointer-events-none scale-[0.98] opacity-0",
                   )}
+                  style={{ touchAction: todayOnly ? "pan-y" : undefined }}
                 >
-                  {showGrid && (
-                    <>
-                      <button
-                        type="button"
-                        aria-label={`Edit ${h.name}`}
-                        onClick={() => setEditingHabit(h)}
-                        className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
-                      >
-                        <Pencil className="size-4" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={h.is_paused ? `Resume ${h.name}` : `Pause ${h.name}`}
-                        onClick={() =>
-                          updateHabit.mutate({ id: h.id, updates: { is_paused: !h.is_paused } })
-                        }
-                        className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
-                      >
-                        {h.is_paused ? (
-                          <PlayCircle className="size-4" />
-                        ) : (
-                          <Pause className="size-4" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${h.name}`}
-                        onClick={() => setDeletingHabit(h)}
-                        className="flex size-11 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-surface hover:text-destructive"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </>
-                  )}
-                  {h.tracking_type === "count" ? (
-                    <div className="flex items-center gap-1.5 rounded-xl bg-cell/70 p-1">
-                      <button
-                        type="button"
-                        aria-label={`Decrease ${h.name} count`}
-                        disabled={
-                          (toggle.isPending && toggle.variables?.habit_id === h.id) ||
-                          inactive ||
-                          (logsByHabitDay.get(`${h.id}|${today}`) ?? 0) <= 0
-                        }
-                        onClick={() => {
-                          const count = logsByHabitDay.get(`${h.id}|${today}`) ?? 0;
-                          updateCount(h.id, count, count - 1, h.daily_goal_count);
-                        }}
-                        className="flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-background active:scale-95 disabled:opacity-40"
-                      >
-                        −
-                      </button>
+                  <span className="habit-swipe-indicator" aria-hidden="true">
+                    <span className="habit-swipe-complete">
+                      <Check className="size-5" />
+                    </span>
+                    <span className="habit-swipe-skip">
+                      <span className="text-xl leading-none">–</span>
+                    </span>
+                  </span>
+                  <div className="habit-swipe-content relative grid min-h-[80px] grid-cols-[2.25rem_minmax(0,1fr)_8.5rem] items-center gap-3 bg-surface px-3 py-2">
+                    {xpFeedback?.habitId === h.id && (
                       <span
-                        aria-label={`${logsByHabitDay.get(`${h.id}|${today}`) ?? 0} of ${h.daily_goal_count} completed`}
-                        className={cn(
-                          "min-w-10 text-center font-mono text-sm font-semibold",
-                          isDone && "text-primary",
-                        )}
+                        key={xpFeedback.key}
+                        role="status"
+                        className={`xp-float pointer-events-none absolute right-3 top-1 z-10 rounded-full border bg-surface px-3 py-1 text-xs font-semibold shadow-md ${
+                          xpFeedback.isNegative ? "text-destructive" : "text-primary"
+                        }`}
                       >
-                        {logsByHabitDay.get(`${h.id}|${today}`) ?? 0}/{h.daily_goal_count}
+                        {xpFeedback.text}
                       </span>
-                      <button
-                        type="button"
-                        aria-label={`Increase ${h.name} count`}
-                        disabled={
-                          (toggle.isPending && toggle.variables?.habit_id === h.id) ||
-                          inactive ||
-                          (logsByHabitDay.get(`${h.id}|${today}`) ?? 0) >= 999
-                        }
-                        onClick={() => {
-                          const count = logsByHabitDay.get(`${h.id}|${today}`) ?? 0;
-                          updateCount(h.id, count, count + 1, h.daily_goal_count);
-                        }}
-                        className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors duration-150 hover:bg-primary/20 active:scale-95"
-                      >
-                        +
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label={`Mark ${h.name} ${isDone ? "not done" : "done"}`}
-                      aria-pressed={isDone}
-                      disabled={
-                        (toggle.isPending && toggle.variables?.habit_id === h.id) ||
-                        inactive ||
-                        toggleLocks.current.has(h.id)
-                      }
-                      onClick={() => {
-                        if (toggleLocks.current.has(h.id)) return;
-                        toggleLocks.current.add(h.id);
-                        if (isDone) cancelHeldCompletion(h.id);
-                        else holdCompletedCard(h.id);
-                        vibrate(isDone ? 10 : 15);
-                        if (!isDone) playOptionalSound("habit-complete");
-                        const actionKey = ++feedbackKey.current;
-                        setUndoAction({
-                          habitId: h.id,
-                          previousDone: isDone,
-                          previousCompletedAt:
-                            completionTimeByHabitDay.get(`${h.id}|${today}`) ?? null,
-                          message: isDone ? "Marked not done." : "Marked done.",
-                          key: actionKey,
-                        });
-                        if (!isDone) showOptimisticXpFeedback(h.id);
-                        toggle.mutate(
-                          {
-                            habit_id: h.id,
-                            day: today,
-                            done: isDone,
-                            completed_at: completionTimeByHabitDay.get(`${h.id}|${today}`) ?? null,
-                          },
-                          {
-                            onSuccess: (result) => {
-                              toggleLocks.current.delete(h.id);
-                              showXpFeedback(h.id, result, !isDone);
-                            },
-                            onError: () => {
-                              toggleLocks.current.delete(h.id);
-                              if (!isDone) cancelHeldCompletion(h.id);
-                              setUndoAction((current) =>
-                                current?.key === actionKey ? null : current,
-                              );
-                              setXpFeedback((current) =>
-                                current?.habitId === h.id ? null : current,
-                              );
-                            },
-                          },
-                        );
-                      }}
-                      className="group flex size-11 shrink-0 items-center justify-center rounded-xl transition-transform duration-150 active:scale-[0.92] disabled:cursor-not-allowed"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "flex size-7 items-center justify-center rounded-[9px] border-[1.5px] transition-colors duration-150",
-                          isDone
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-[var(--check-empty-border)] bg-transparent text-transparent group-hover:border-primary group-focus-visible:border-primary",
-                        )}
-                      >
-                        {isDone && <Check className="habit-check-mark size-4" />}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div
-                id={`habit-details-${h.id}`}
-                aria-hidden={!isExpanded}
-                data-habit-details
-                data-open={isExpanded}
-                className="habit-details-motion"
-              >
-                <div className="min-h-0 overflow-hidden">
-                  <div className="border-t border-border/70 pt-3">
-                    {h.description && (
-                      <p className="mb-3 text-sm text-[var(--text-secondary)]">{h.description}</p>
                     )}
-                    {isTimedHabit(h) && goal > 0 && (
-                      <div className="mb-3">
-                        <div className="mb-1.5 flex justify-between text-sm text-[var(--text-secondary)]">
-                          <span>Today&apos;s focus goal</span>
-                          <span>
-                            {formatMinutes(minutes)} / {formatMinutes(goal)}
-                          </span>
-                        </div>
-                        <div
-                          role="progressbar"
-                          aria-label={`${h.name} time goal`}
-                          aria-valuenow={Math.min(100, Math.round((minutes / goal) * 100))}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          className="h-2 overflow-hidden rounded-full bg-cell"
+                    <HabitCardContent
+                      habit={h}
+                      streak={streak.current}
+                      xpAmount={xpAmount}
+                      goal={goal}
+                      isTimed={isTimedHabit(h)}
+                      isDone={isDone}
+                      isFinished={isFinished}
+                      canExpand={canExpand}
+                      isExpanded={isExpanded}
+                      dayKeys={weekDays}
+                      weekStates={weekStrip}
+                      onToggleExpanded={() => toggleExpandedHabit(h.id)}
+                    />
+                    <div className="flex items-center justify-end gap-0.5">
+                      {canSelect && (
+                        <button
+                          type="button"
+                          aria-label={COPY.habits.timer(h.name)}
+                          aria-pressed={isSelected}
+                          onClick={() => onSelectHabit?.(isSelected ? "" : h.id)}
+                          className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-cell hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          <div
-                            className="h-full origin-left scale-x-0 rounded-full bg-primary transition-transform duration-200"
-                            style={{
-                              transform: `scaleX(${Math.min(100, (minutes / goal) * 100) / 100})`,
+                          <TimerIcon className="size-4" />
+                        </button>
+                      )}
+                      {(showGrid || todayOnly) && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`${COPY.habits.menu}: ${h.name}`}
+                              className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-cell focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <MoreHorizontal className="size-5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="rounded-xl">
+                            <DropdownMenuItem onSelect={() => setEditingHabit(h)}>
+                              <Pencil /> {COPY.habits.edit}
+                            </DropdownMenuItem>
+                            {todayOnly && !isDone && !isSkipped && (
+                              <DropdownMenuItem onSelect={() => skipHabitToday(h)}>
+                                <span aria-hidden="true">–</span> {COPY.habits.skip}
+                              </DropdownMenuItem>
+                            )}
+                            {showGrid && (
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  updateHabit.mutate({
+                                    id: h.id,
+                                    updates: { is_paused: !h.is_paused },
+                                  })
+                                }
+                              >
+                                {h.is_paused ? <PlayCircle /> : <Pause />}
+                                {h.is_paused ? "Resume" : "Pause"}
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() => setDeletingHabit(h)}
+                            >
+                              <Trash2 /> {COPY.habits.delete}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {h.tracking_type === "count" ? (
+                        <div className="flex items-center gap-1.5 rounded-xl bg-cell/70 p-1">
+                          <button
+                            type="button"
+                            aria-label={`Decrease ${h.name} count`}
+                            disabled={
+                              (toggle.isPending && toggle.variables?.habit_id === h.id) ||
+                              inactive ||
+                              (logsByHabitDay.get(`${h.id}|${today}`) ?? 0) <= 0
+                            }
+                            onClick={() => {
+                              const count = logsByHabitDay.get(`${h.id}|${today}`) ?? 0;
+                              updateCount(h.id, count, count - 1, h.daily_goal_count);
                             }}
-                          />
+                            className="flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-background active:scale-95 disabled:opacity-40"
+                          >
+                            −
+                          </button>
+                          <span
+                            aria-label={`${logsByHabitDay.get(`${h.id}|${today}`) ?? 0} of ${h.daily_goal_count} completed`}
+                            className={cn(
+                              "min-w-10 text-center font-mono text-sm font-semibold",
+                              isDone && "text-primary",
+                            )}
+                          >
+                            {logsByHabitDay.get(`${h.id}|${today}`) ?? 0}/{h.daily_goal_count}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Increase ${h.name} count`}
+                            disabled={
+                              (toggle.isPending && toggle.variables?.habit_id === h.id) ||
+                              inactive ||
+                              (logsByHabitDay.get(`${h.id}|${today}`) ?? 0) >= 999
+                            }
+                            onClick={() => {
+                              const count = logsByHabitDay.get(`${h.id}|${today}`) ?? 0;
+                              updateCount(h.id, count, count + 1, h.daily_goal_count);
+                            }}
+                            className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors duration-150 hover:bg-primary/20 active:scale-95"
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={COPY.habits.check(h.name, isDone)}
+                          aria-pressed={isDone}
+                          disabled={
+                            (toggle.isPending && toggle.variables?.habit_id === h.id) ||
+                            (skipDay.isPending && skipDay.variables?.habitId === h.id) ||
+                            inactive ||
+                            toggleLocks.current.has(h.id)
+                          }
+                          onClick={() => {
+                            if (suppressTouchClick.current) return;
+                            toggleHabitCompletion(h, isDone);
+                          }}
+                          className={cn(
+                            "habit-check-button group flex size-12 shrink-0 items-center justify-center rounded-full bg-cell transition-transform duration-150 active:scale-[0.92] disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-ring",
+                            isDone && "habit-check-pop bg-primary text-primary-foreground",
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "flex size-8 items-center justify-center rounded-full border-[1.5px] transition-colors duration-150",
+                              isDone
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-[var(--check-empty-border)] bg-transparent text-transparent group-hover:border-primary group-focus-visible:border-primary",
+                            )}
+                          >
+                            {isDone && <Check className="habit-check-mark size-4" />}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                    <div
+                      id={`habit-details-${h.id}`}
+                      aria-hidden={!isExpanded}
+                      data-habit-details
+                      data-open={isExpanded}
+                      className="habit-details-motion col-span-full"
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="border-t border-border/70 pt-3">
+                          {h.description && (
+                            <p className="mb-3 text-sm text-[var(--text-secondary)]">
+                              {h.description}
+                            </p>
+                          )}
+                          {isTimedHabit(h) && goal > 0 && (
+                            <div className="mb-3">
+                              <div className="mb-1.5 flex justify-between text-sm text-[var(--text-secondary)]">
+                                <span>Today&apos;s focus goal</span>
+                                <span>
+                                  {formatMinutes(minutes)} / {formatMinutes(goal)}
+                                </span>
+                              </div>
+                              <div
+                                role="progressbar"
+                                aria-label={`${h.name} time goal`}
+                                aria-valuenow={Math.min(100, Math.round((minutes / goal) * 100))}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                className="h-2 overflow-hidden rounded-full bg-cell"
+                              >
+                                <div
+                                  className="h-full origin-left scale-x-0 rounded-full bg-primary transition-transform duration-200"
+                                  style={{
+                                    transform: `scaleX(${Math.min(100, (minutes / goal) * 100) / 100})`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {canSelect && (
+                            <button
+                              type="button"
+                              tabIndex={isExpanded ? 0 : -1}
+                              aria-pressed={isSelected}
+                              onClick={() => onSelectHabit?.(isSelected ? "" : h.id)}
+                              className="min-h-11 rounded-xl bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/15"
+                            >
+                              {isSelected ? "Selected for focus" : "Select for focus"}
+                            </button>
+                          )}
                         </div>
                       </div>
-                    )}
-                    {canSelect && (
-                      <button
-                        type="button"
-                        tabIndex={isExpanded ? 0 : -1}
-                        aria-pressed={isSelected}
-                        onClick={() => onSelectHabit?.(isSelected ? "" : h.id)}
-                        className="min-h-11 rounded-xl bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/15"
-                      >
-                        {isSelected ? "Selected for focus" : "Select for focus"}
-                      </button>
-                    )}
+                    </div>
                   </div>
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      {undoAction && (
-        <div
-          key={undoAction.key}
-          role="status"
-          aria-live="polite"
-          className="fixed bottom-24 left-1/2 z-50 flex min-h-12 w-[min(92vw,26rem)] -translate-x-1/2 items-center justify-between gap-3 rounded-xl bg-foreground px-4 py-2 text-sm text-background shadow-lg lg:bottom-6"
-        >
-          <span>{undoAction.message}</span>
-          <button
-            type="button"
-            onClick={undoCompletion}
-            className="min-h-11 rounded-lg px-3 font-semibold text-primary-foreground underline underline-offset-4"
-          >
-            Undo
-          </button>
-        </div>
-      )}
+                </li>
+              </Fragment>
+            );
+          })}
+        </ul>
+      </div>
       <HabitFormDialog
         habit={editingHabit}
         open={Boolean(editingHabit)}

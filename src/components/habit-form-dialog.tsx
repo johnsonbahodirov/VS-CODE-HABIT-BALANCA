@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronDown, Minus, Plus } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Minus, MoreHorizontal, Plus, Timer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { RoundStepperButton } from "@/components/timer-settings-panel";
 import { HABIT_COLORS, colorBg, useAddHabit, useUpdateHabit } from "@/lib/data";
+import { HabitCardContent } from "@/components/habit-card-content";
 import {
   HABIT_CATEGORIES,
   HABIT_ICONS,
@@ -14,31 +15,27 @@ import {
   HABIT_ICON_LABELS,
   habitIcon,
 } from "@/lib/habit-meta";
-import { isTimedHabit } from "@/lib/today";
+import { getWeekDayKeys, getWeekStrip, isTimedHabit } from "@/lib/today";
+import { xpRewardsForCompletion } from "@/lib/gamification";
+import {
+  getHabitDurationError,
+  HABIT_DURATION_PRESETS,
+  habitEndDateAfterDays,
+  inclusiveHabitDurationDays,
+  isHabitDurationPreset,
+  type HabitDurationOption,
+} from "@/lib/habit-duration";
+import { COPY } from "@/lib/strings";
 import { cn } from "@/lib/utils";
 import type { Database } from "@/integrations/supabase/types";
 
 type Habit = Database["public"]["Tables"]["habits"]["Row"];
 type HabitType = "yesno" | "timed";
-type DurationMode = "none" | "days" | "dates";
-
 function localDateKey(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function dateAfterDays(startDate: string, days: number): string {
-  const date = new Date(`${startDate}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days - 1);
-  return date.toISOString().slice(0, 10);
-}
-
-function inclusiveDaysBetween(startDate: string, endDate: string): number {
-  const start = new Date(`${startDate}T00:00:00Z`).getTime();
-  const end = new Date(`${endDate}T00:00:00Z`).getTime();
-  return Math.floor((end - start) / 86400000) + 1;
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -62,7 +59,6 @@ const GOAL_PRESETS = [
   ["1h", 60],
   ["2h", 120],
 ] as const;
-
 export function HabitFormDialog({
   open,
   onOpenChange,
@@ -80,10 +76,9 @@ export function HabitFormDialog({
   const [icon, setIcon] = useState("dumbbell");
   const [color, setColor] = useState<string>("#219B70");
   const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
-  const [durationMode, setDurationMode] = useState<DurationMode>("none");
+  const [durationOption, setDurationOption] = useState<HabitDurationOption>("");
   const [startDate, setStartDate] = useState(() => localDateKey());
   const [endDate, setEndDate] = useState("");
-  const [durationDays, setDurationDays] = useState("30");
   const [type, setType] = useState<HabitType>("yesno");
   const [goalHours, setGoalHours] = useState("0");
   const [goalMinutes, setGoalMinutes] = useState("30");
@@ -107,6 +102,35 @@ export function HabitFormDialog({
   );
   const isPending = addHabit.isPending || updateHabit.isPending;
   const CategoryIcon = HABIT_ICONS[CATEGORY_ICON_KEYS[category] ?? "sparkles"]!;
+  const previewDate = new Date();
+  const previewToday = localDateKey(previewDate);
+  const previewHabit = {
+    id: "habit-preview",
+    name: name.trim() || COPY.habits.placeholderName,
+    icon,
+    color,
+    category,
+    habit_type: type,
+  };
+  const previewDayKeys = getWeekDayKeys(previewDate);
+  const previewWeekStates = getWeekStrip(
+    {
+      ...previewHabit,
+      frequency: days.length === 7 ? "daily" : "selected_days",
+      schedule_days: days,
+      start_date: startDate,
+      end_date: endDate || null,
+      skipped_dates: [],
+    },
+    new Set(),
+    previewDate,
+  );
+  const previewXpAmount = xpRewardsForCompletion(
+    previewHabit.id,
+    previewToday,
+    1,
+    difficulty,
+  ).reduce((total, reward) => total + reward.amount, 0);
 
   const setGoalTotal = (minutes: number) => {
     const total = Math.max(0, Math.min(1440, minutes));
@@ -137,16 +161,16 @@ export function HabitFormDialog({
       setDays(habit.schedule_days);
       setStartDate(habit.start_date ?? habit.created_at.slice(0, 10));
       setEndDate(habit.end_date ?? "");
-      setDurationMode(habit.end_date ? "dates" : "none");
-      setDurationDays(
+      const durationDays = habit.end_date
+        ? inclusiveHabitDurationDays(
+            habit.start_date ?? habit.created_at.slice(0, 10),
+            habit.end_date,
+          )
+        : 0;
+      setDurationOption(
         habit.end_date
-          ? String(
-              inclusiveDaysBetween(
-                habit.start_date ?? habit.created_at.slice(0, 10),
-                habit.end_date,
-              ),
-            )
-          : "30",
+          ? (HABIT_DURATION_PRESETS.find((value) => Number(value) === durationDays) ?? "custom")
+          : "",
       );
       setType(isTimedHabit(habit) ? "timed" : "yesno");
       setGoalHours(String(Math.floor(habit.daily_goal_minutes / 60)));
@@ -166,10 +190,9 @@ export function HabitFormDialog({
       setIcon("dumbbell");
       setColor("#219B70");
       setDays([0, 1, 2, 3, 4, 5, 6]);
-      setDurationMode("none");
+      setDurationOption("");
       setStartDate(localDateKey());
       setEndDate("");
-      setDurationDays("30");
       setType("yesno");
       setGoalHours("0");
       setGoalMinutes("30");
@@ -231,14 +254,8 @@ export function HabitFormDialog({
             : totalGoalMinutes > 1440
               ? "Daily focus goal cannot exceed 24 hours."
               : "";
-    const daysValue = Number(durationDays);
-    const nextLengthError = !startDate
-      ? "Choose a start date."
-      : durationMode === "days" && (!Number.isInteger(daysValue) || daysValue < 1 || !endDate)
-        ? "Enter a whole number of days, at least 1."
-        : durationMode !== "none" && (!endDate || endDate < startDate)
-          ? "End date cannot be before the start date."
-          : "";
+    const durationError = getHabitDurationError(durationOption, startDate, endDate);
+    const nextLengthError = durationError ? COPY.habits[durationError] : "";
     setNameError(nextNameError);
     setGoalError(nextGoalError);
     setLengthError(nextLengthError);
@@ -258,7 +275,7 @@ export function HabitFormDialog({
       reminder_enabled: reminderEnabled,
       reminder_time: reminderTime,
       start_date: startDate,
-      end_date: durationMode === "none" ? null : endDate,
+      end_date: endDate,
       habit_type: type,
       tracking_type: habit?.tracking_type === "count" ? ("count" as const) : ("yes_no" as const),
       daily_goal_count: habit?.tracking_type === "count" ? countGoal : 1,
@@ -462,35 +479,25 @@ export function HabitFormDialog({
                   How long?
                 </legend>
                 <div className="grid grid-cols-3 gap-2">
-                  {(
-                    [
-                      ["none", "No end date"],
-                      ["days", "Number of days"],
-                      ["dates", "Pick dates"],
-                    ] as const
-                  ).map(([value, label]) => (
+                  {[...HABIT_DURATION_PRESETS, "custom" as const].map((value, index) => (
                     <button
                       key={value}
                       type="button"
-                      aria-pressed={durationMode === value}
+                      aria-pressed={durationOption === value}
                       onClick={() => {
-                        setDurationMode(value);
+                        setDurationOption(value);
                         setLengthError("");
-                        if (value === "days" && startDate) {
-                          const count = Number(durationDays);
-                          if (Number.isInteger(count) && count >= 1) {
-                            setEndDate(dateAfterDays(startDate, count));
-                          }
-                        }
+                        if (value !== "custom" && startDate)
+                          setEndDate(habitEndDateAfterDays(startDate, Number(value)));
                       }}
                       className={cn(
                         "min-h-10 rounded-xl px-2 text-xs font-semibold sm:text-sm",
-                        durationMode === value
+                        durationOption === value
                           ? "bg-primary text-primary-foreground"
                           : "bg-cell text-muted-foreground",
                       )}
                     >
-                      {label}
+                      {COPY.habits.durationOptions[index]}
                     </button>
                   ))}
                 </div>
@@ -503,44 +510,14 @@ export function HabitFormDialog({
                       const next = event.target.value;
                       setStartDate(next);
                       setLengthError("");
-                      const count = Number(durationDays);
-                      if (
-                        durationMode === "days" &&
-                        next &&
-                        Number.isInteger(count) &&
-                        count >= 1
-                      ) {
-                        setEndDate(dateAfterDays(next, count));
-                      }
+                      if (isHabitDurationPreset(durationOption) && next)
+                        setEndDate(habitEndDateAfterDays(next, Number(durationOption)));
                     }}
                     aria-label="Habit start date"
                     className="mt-1 h-10 rounded-xl bg-cell"
                   />
                 </label>
-                {durationMode === "days" && (
-                  <label className="block text-xs font-medium text-muted-foreground">
-                    Number of days
-                    <Input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={durationDays}
-                      onChange={(event) => {
-                        const next = event.target.value;
-                        setDurationDays(next);
-                        setLengthError("");
-                        const count = Number(next);
-                        if (startDate && Number.isInteger(count) && count >= 1) {
-                          setEndDate(dateAfterDays(startDate, count));
-                        }
-                      }}
-                      aria-label="Number of days"
-                      aria-invalid={Boolean(lengthError)}
-                      className="mt-1 h-10 rounded-xl bg-cell"
-                    />
-                  </label>
-                )}
-                {durationMode !== "none" && (
+                {durationOption === "custom" && (
                   <label className="block text-xs font-medium text-muted-foreground">
                     End date
                     <Input
@@ -551,20 +528,20 @@ export function HabitFormDialog({
                         const next = event.target.value;
                         setEndDate(next);
                         setLengthError("");
-                        if (startDate && next && next >= startDate) {
-                          setDurationDays(String(inclusiveDaysBetween(startDate, next)));
-                        }
                       }}
                       aria-label="Habit end date"
                       aria-invalid={Boolean(lengthError)}
                       className="mt-1 h-10 rounded-xl bg-cell"
                     />
-                    {durationMode === "days" && endDate && (
-                      <span className="mt-1 block text-muted-foreground">
-                        Ends {new Date(`${endDate}T12:00:00`).toLocaleDateString()}
-                      </span>
-                    )}
                   </label>
+                )}
+                {isHabitDurationPreset(durationOption) && endDate && (
+                  <p className="text-xs text-muted-foreground">
+                    {COPY.habits.durationPreview(
+                      Number(durationOption),
+                      new Date(`${endDate}T12:00:00`).toLocaleDateString(),
+                    )}
+                  </p>
                 )}
                 {lengthError && (
                   <p role="alert" className="text-xs text-destructive">
@@ -772,16 +749,36 @@ export function HabitFormDialog({
                   ))}
                 </div>
               </div>
-              <div className="flex items-center gap-2 rounded-xl border bg-cell/40 p-3">
-                <span
-                  className={cn(
-                    "flex size-9 items-center justify-center rounded-xl text-background",
-                    colorBg[color],
-                  )}
-                >
-                  <SelectedIcon className="size-5" />
-                </span>
-                <span className="text-sm font-medium">{name.trim() || "Habit preview"}</span>
+              <div className="overflow-hidden rounded-2xl border bg-surface shadow-sm">
+                <div className="grid min-h-[80px] grid-cols-[2.25rem_minmax(0,1fr)_8.5rem] items-center gap-3 bg-surface px-3 py-2">
+                  <HabitCardContent
+                    habit={previewHabit}
+                    streak={0}
+                    xpAmount={previewXpAmount}
+                    goal={type === "timed" ? totalGoalMinutes : 0}
+                    isTimed={type === "timed"}
+                    isDone={false}
+                    isFinished={Boolean(endDate && previewToday > endDate)}
+                    canExpand={type === "timed"}
+                    isExpanded={false}
+                    dayKeys={previewDayKeys}
+                    weekStates={previewWeekStates}
+                  />
+                  <div className="flex items-center justify-end gap-0.5">
+                    {type === "timed" && (
+                      <span className="flex size-10 items-center justify-center rounded-full text-muted-foreground">
+                        <Timer className="size-4" />
+                      </span>
+                    )}
+                    <span className="flex size-10 items-center justify-center rounded-full text-muted-foreground">
+                      <MoreHorizontal className="size-5" />
+                    </span>
+                    <span className="flex size-12 items-center justify-center rounded-full bg-cell">
+                      <span className="size-8 rounded-full border-[1.5px] border-[var(--check-empty-border)]" />
+                    </span>
+                  </div>
+                </div>
+                <div id="habit-details-habit-preview" hidden />
               </div>
 
               <label className="block text-xs font-medium text-muted-foreground">

@@ -13,14 +13,13 @@ import {
   LEVEL_REWARDS,
   type AchievementCategory,
   type AchievementDefinition,
-  detectComeback,
   getLevelProgress,
   getAchievementProgress,
-  scheduledStreakStats,
   HABIT_COMPLETION_XP,
   STREAK_XP_MILESTONES,
   type AchievementTier,
 } from "@/lib/gamification";
+import { calculateAchievementUserStats } from "@/lib/achievement-stats";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import {
@@ -34,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { DatabaseErrorNotice } from "@/components/database-error-notice";
 import { dayKey } from "@/lib/balance";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { friendlyErrorMessage } from "@/lib/feedback";
 
 export function XpProgressCard({
   compact = false,
@@ -48,6 +48,10 @@ export function XpProgressCard({
   const totalXp = data?.totalXp ?? 0;
   const level = getLevelProgress(totalXp);
   const todayXp = useDailyXP(day ?? dayKey(new Date()));
+  const todayXpError = useMemo(
+    () => (todayXp.isError ? friendlyErrorMessage(todayXp.error) : ""),
+    [todayXp.error, todayXp.isError],
+  );
 
   if (isError)
     return (
@@ -98,8 +102,7 @@ export function XpProgressCard({
       {showDaily &&
         (todayXp.isError ? (
           <p role="alert" className="mt-3 text-xs text-destructive">
-            Today’s XP could not be loaded:{" "}
-            {todayXp.error instanceof Error ? todayXp.error.message : "unknown error"}
+            {todayXpError}
           </p>
         ) : (
           <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -382,101 +385,12 @@ export function AchievementGrid({
   );
 
   const userStats = useMemo(() => {
-    const habits = habitsQuery.data ?? [];
-    const logs = logsQuery.data ?? [];
-    const totalXp = xpQuery.data?.totalXp ?? 0;
-    const today = new Date().toISOString().slice(0, 10);
-
-    const completedLogs = logs.filter((log) => {
-      const h = habits.find((item) => item.id === log.habit_id);
-      if (!h) return (log.count ?? 1) >= 1;
-      return h.tracking_type === "count"
-        ? (log.count ?? 0) >= h.daily_goal_count
-        : (log.count ?? 1) >= 1;
-    });
-
-    const completedDays = completedLogs.map((l) => l.day);
-    const uniqueDays = new Set(completedDays);
-
-    let longestStreak = 0;
-    let longestLearningStreak = 0;
-
-    for (const habit of habits) {
-      const habitDays = completedLogs.filter((l) => l.habit_id === habit.id).map((l) => l.day);
-      const stats = scheduledStreakStats(habitDays, today, habit);
-      if (stats.longest > longestStreak) longestStreak = stats.longest;
-
-      const isLearning =
-        habit.category.toLowerCase().includes("learn") ||
-        habit.name.toLowerCase().includes("learn") ||
-        habit.name.toLowerCase().includes("study");
-      if (isLearning && stats.longest > longestLearningStreak) {
-        longestLearningStreak = stats.longest;
-      }
-    }
-
-    const readingCompletions = completedLogs.filter((log) => {
-      const h = habits.find((item) => item.id === log.habit_id);
-      const cat = (h?.category ?? "").toLowerCase();
-      const name = (h?.name ?? "").toLowerCase();
-      return cat.includes("read") || name.includes("read") || name.includes("book");
-    }).length;
-
-    const learningCompletions = completedLogs.filter((log) => {
-      const h = habits.find((item) => item.id === log.habit_id);
-      const cat = (h?.category ?? "").toLowerCase();
-      const name = (h?.name ?? "").toLowerCase();
-      return cat.includes("learn") || name.includes("learn") || name.includes("study");
-    }).length;
-
-    const workoutCompletions = completedLogs.filter((log) => {
-      const h = habits.find((item) => item.id === log.habit_id);
-      const cat = (h?.category ?? "").toLowerCase();
-      const name = (h?.name ?? "").toLowerCase();
-      return (
-        cat.includes("fitness") ||
-        cat.includes("workout") ||
-        name.includes("workout") ||
-        name.includes("gym") ||
-        name.includes("run") ||
-        name.includes("fitness")
-      );
-    }).length;
-
-    const morningCompletions = completedLogs.filter((log) => {
-      const h = habits.find((item) => item.id === log.habit_id);
-      const name = (h?.name ?? "").toLowerCase();
-      const desc = (h?.description ?? "").toLowerCase();
-      return name.includes("morning") || desc.includes("morning");
-    }).length;
-
-    const comebackInfo = detectComeback(completedDays, today);
-    const levelInfo = getLevelProgress(totalXp);
-
-    return {
-      habitsCount: habits.length,
-      totalCompletions: completedLogs.length,
-      morningCompletions,
-      readingCompletions,
-      learningCompletions,
-      workoutCompletions,
-      longestStreak,
-      longestLearningStreak,
-      perfectDaysCount: Math.min(
-        uniqueDays.size,
-        Math.floor(completedLogs.length / Math.max(1, habits.length)),
-      ),
-      activeUniqueDays: uniqueDays.size,
-      totalXp,
-      level: levelInfo.level,
-      comebackCount: comebackInfo.comebackCycles,
-      postComebackLongestStreak: comebackInfo.comebackCycles > 0 ? longestStreak : 0,
-      postComebackActiveDays: comebackInfo.comebackCycles > 0 ? uniqueDays.size : 0,
-      thirtyDayCompletionRate: Math.min(
-        100,
-        Math.round((completedLogs.length / Math.max(1, habits.length * 30)) * 100),
-      ),
-    };
+    return calculateAchievementUserStats(
+      habitsQuery.data ?? [],
+      logsQuery.data ?? [],
+      xpQuery.data?.totalXp ?? 0,
+      dayKey(new Date()),
+    );
   }, [habitsQuery.data, logsQuery.data, xpQuery.data?.totalXp]);
 
   if (isError)

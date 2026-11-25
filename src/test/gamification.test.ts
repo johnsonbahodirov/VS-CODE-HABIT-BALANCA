@@ -62,6 +62,15 @@ describe("gamification rules", () => {
     ).toEqual({ current: 1, longest: 1 });
   });
 
+  it("does not break or add to a streak for a skipped scheduled day", () => {
+    expect(
+      scheduledStreakStats(["2026-11-02", "2026-11-04"], "2026-11-04", {
+        frequency: "daily",
+        skipped_dates: ["2026-11-03"],
+      }),
+    ).toEqual({ current: 2, longest: 2 });
+  });
+
   it("only counts scheduled days between a habit's start and end dates", () => {
     const habit = {
       frequency: "daily",

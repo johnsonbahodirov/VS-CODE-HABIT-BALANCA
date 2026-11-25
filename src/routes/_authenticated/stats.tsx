@@ -47,6 +47,8 @@ import { HabitBadge } from "@/components/app-widgets";
 import { DatabaseErrorNotice } from "@/components/database-error-notice";
 import { isHabitScheduledOnDay, scheduledStreakStats } from "@/lib/gamification";
 import { HABIT_COLORS, HABIT_COLOR_VALUES } from "@/lib/data";
+import { calculateWeeklyInsights } from "@/lib/stats-insights";
+import { COPY } from "@/lib/strings";
 
 const StatsChart = lazy(() => import("@/components/stats-chart"));
 const StatsBreakdownChart = lazy(() => import("@/components/stats-breakdown-chart"));
@@ -190,7 +192,12 @@ function Stats() {
   const totalMinutes = days.reduce((sum, day) => sum + (timeByDay.get(dayKey(day)) ?? 0), 0);
   const totalDone = days.reduce((sum, day) => sum + (logCounts.get(dayKey(day)) ?? 0), 0);
   const possible = days.reduce(
-    (sum, day) => sum + habits.filter((habit) => isHabitScheduledOnDay(habit, dayKey(day))).length,
+    (sum, day) =>
+      sum +
+      habits.filter(
+        (habit) =>
+          isHabitScheduledOnDay(habit, dayKey(day)) && !habit.skipped_dates.includes(dayKey(day)),
+      ).length,
     0,
   );
   const completionRate = possible ? Math.round((totalDone / possible) * 100) : 0;
@@ -213,9 +220,26 @@ function Stats() {
     date.setDate(date.getDate() + index);
     return date;
   });
+  const previousWeekDates = weekDates.map((date) => {
+    const previous = new Date(date);
+    previous.setDate(previous.getDate() - 7);
+    return previous;
+  });
+  const weeklyInsights = calculateWeeklyInsights(
+    habits,
+    completions,
+    weekDates.map(dayKey),
+    previousWeekDates.map(dayKey),
+    today,
+  );
   const bestHabitThisWeek = habits
     .map((habit) => {
-      const scheduledDays = weekDates.filter((date) => isHabitScheduledOnDay(habit, dayKey(date)));
+      const scheduledDays = weekDates.filter(
+        (date) =>
+          dayKey(date) <= today &&
+          isHabitScheduledOnDay(habit, dayKey(date)) &&
+          !habit.skipped_dates.includes(dayKey(date)),
+      );
       const completedDays = scheduledDays.filter((date) =>
         completions.has(`${habit.id}|${dayKey(date)}`),
       ).length;
@@ -560,6 +584,35 @@ function Stats() {
             />
             <InsightTile label="XP earned" value={`+${weekXp} XP`} icon={<Award />} />
           </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <InsightTile
+              label={COPY.stats.weeklyCompletion}
+              value={COPY.stats.weekComparison(
+                weeklyInsights.completionRate,
+                weeklyInsights.previousCompletionRate,
+                weeklyInsights.completionRateChange,
+              )}
+              icon={<Check />}
+            />
+            <InsightTile
+              label={COPY.stats.bestWeekday}
+              value={
+                weeklyInsights.bestWeekday
+                  ? `${COPY.stats.weekdays[weeklyInsights.bestWeekday.weekdayIndex]} · ${weeklyInsights.bestWeekday.completionRate}%`
+                  : COPY.stats.noScheduledData
+              }
+              icon={<Flame />}
+            />
+            <InsightTile
+              label={COPY.stats.mostMissed}
+              value={
+                weeklyInsights.mostMissedHabit
+                  ? `${weeklyInsights.mostMissedHabit.name} · ${COPY.stats.missedCount(weeklyInsights.mostMissedHabit.missed)}`
+                  : COPY.stats.noMissedHabits
+              }
+              icon={<Target />}
+            />
+          </div>
           <div className="mt-4 rounded-2xl border border-primary/10 bg-background/60 px-4 py-3">
             <p className="text-xs font-medium text-muted-foreground">Your best habit this week</p>
             {bestHabitThisWeek && bestHabitThisWeek.completedDays > 0 ? (
@@ -579,8 +632,7 @@ function Stats() {
             )}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Your consistency score is {completionRate}%. Small, repeated actions build lasting
-            progress.
+            {COPY.stats.week(completionRate)}. Small, repeated actions build lasting progress.
           </p>
         </section>
       )}

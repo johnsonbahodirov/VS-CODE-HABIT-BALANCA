@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   getTodayFocusPlan,
   getTodayHabits,
+  getTimedHabitCompletionCandidates,
   getWeekDayKeys,
   getWeekStrip,
+  isHabitSkippedOnDay,
   isTimedHabit,
 } from "@/lib/today";
 
@@ -95,6 +97,49 @@ describe("Today habit calculations", () => {
     });
   });
 
+  it("excludes skipped timed habits from the focus plan", () => {
+    expect(
+      getTodayFocusPlan(
+        [
+          { id: "skipped", habit_type: "timed", daily_goal_minutes: 30, skipped_dates: [today] },
+          { id: "planned", habit_type: "timed", daily_goal_minutes: 25 },
+        ],
+        new Map(),
+        today,
+      ),
+    ).toEqual({ plannedMinutes: 25, completedMinutes: 0, percentage: 0 });
+    expect(isHabitSkippedOnDay({ id: "skipped", skipped_dates: [today] }, today)).toBe(true);
+  });
+
+  it("auto-completes only active, scheduled, unskipped timed habits that meet their goal", () => {
+    const habits = [
+      { id: "ready", habit_type: "timed", daily_goal_minutes: 30 },
+      { id: "incomplete", habit_type: "timed", daily_goal_minutes: 30 },
+      { id: "already-done", habit_type: "timed", daily_goal_minutes: 30 },
+      { id: "skipped", habit_type: "timed", daily_goal_minutes: 30, skipped_dates: [today] },
+      { id: "yesno", habit_type: "yesno", daily_goal_minutes: 0 },
+      { id: "zero-goal", habit_type: "timed", daily_goal_minutes: 0 },
+      { id: "paused", habit_type: "timed", daily_goal_minutes: 30, is_paused: true },
+    ];
+
+    expect(
+      getTimedHabitCompletionCandidates(
+        habits,
+        new Map([
+          ["ready|2026-11-22", 30],
+          ["incomplete|2026-11-22", 29.99],
+          ["already-done|2026-11-22", 45],
+          ["skipped|2026-11-22", 45],
+          ["yesno|2026-11-22", 45],
+          ["zero-goal|2026-11-22", 45],
+          ["paused|2026-11-22", 45],
+        ]),
+        new Set(["already-done|2026-11-22"]),
+        today,
+      ).map((habit) => habit.id),
+    ).toEqual(["ready"]);
+  });
+
   it("builds a Monday-to-Sunday strip with completed, missed, pending, and future days", () => {
     const todayDate = new Date(2026, 10, 25, 12);
     const week = getWeekDayKeys(todayDate);
@@ -123,5 +168,21 @@ describe("Today habit calculations", () => {
         todayDate,
       ),
     ).toEqual(["missed", "off", "pending", "off", "off", "off", "off"]);
+  });
+
+  it("shows skipped scheduled dates as dashes in the week strip", () => {
+    const todayDate = new Date(2026, 10, 25, 12);
+    expect(
+      getWeekStrip(
+        {
+          id: "skipped",
+          frequency: "selected_days",
+          schedule_days: [2, 3],
+          skipped_dates: ["2026-11-24"],
+        },
+        new Set(),
+        todayDate,
+      ),
+    ).toEqual(["off", "skipped", "pending", "off", "off", "off", "off"]);
   });
 });

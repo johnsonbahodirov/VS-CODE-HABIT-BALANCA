@@ -11,9 +11,10 @@ export type TodayHabit = {
   habit_type?: string | null;
   is_paused?: boolean | null;
   schedule_days?: number[] | null;
+  skipped_dates?: string[] | null;
 };
 
-export type DayState = "done" | "missed" | "pending" | "future" | "off";
+export type DayState = "done" | "missed" | "pending" | "future" | "off" | "skipped";
 
 export function getWeekDayKeys(today: Date): string[] {
   const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -37,9 +38,14 @@ export function getWeekStrip(
     if (!isHabitScheduledOnDay(habit, day)) return "off";
     if (day > todayKey) return "future";
     if (completedDays.has(day)) return "done";
+    if (habit.skipped_dates?.includes(day)) return "skipped";
     if (day === todayKey) return "pending";
     return "missed";
   });
+}
+
+export function isHabitSkippedOnDay(habit: TodayHabit, day: string): boolean {
+  return Boolean(habit.skipped_dates?.includes(day));
 }
 
 export function isTimedHabit(habit: TodayHabit): boolean {
@@ -57,7 +63,9 @@ export function getTodayFocusPlan(
   minutesByHabitDay: ReadonlyMap<string, number>,
   day: string,
 ): { plannedMinutes: number; completedMinutes: number; percentage: number } {
-  const timedHabits = getTodayHabits(habits, day).filter(isTimedHabit);
+  const timedHabits = getTodayHabits(habits, day).filter(
+    (habit) => isTimedHabit(habit) && !isHabitSkippedOnDay(habit, day),
+  );
   const plannedMinutes = timedHabits.reduce(
     (total, habit) => total + Math.max(0, habit.daily_goal_minutes ?? 0),
     0,
@@ -73,4 +81,20 @@ export function getTodayFocusPlan(
     percentage:
       plannedMinutes > 0 ? Math.min(100, Math.round((completedMinutes / plannedMinutes) * 100)) : 0,
   };
+}
+
+export function getTimedHabitCompletionCandidates<T extends TodayHabit>(
+  habits: T[],
+  minutesByHabitDay: ReadonlyMap<string, number>,
+  completedHabitDays: ReadonlySet<string>,
+  day: string,
+): T[] {
+  return getTodayHabits(habits, day).filter(
+    (habit) =>
+      isTimedHabit(habit) &&
+      !isHabitSkippedOnDay(habit, day) &&
+      !completedHabitDays.has(`${habit.id}|${day}`) &&
+      (habit.daily_goal_minutes ?? 0) > 0 &&
+      (minutesByHabitDay.get(`${habit.id}|${day}`) ?? 0) >= (habit.daily_goal_minutes ?? 0),
+  );
 }

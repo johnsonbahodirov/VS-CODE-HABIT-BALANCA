@@ -329,6 +329,87 @@ a,
   align-items: start;
 }
 
+.today-progress-ring {
+  transition: stroke-dashoffset 500ms ease-out;
+}
+
+.habit-swipe-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 1rem;
+  background: color-mix(in oklab, var(--muted-foreground) 25%, var(--surface));
+  color: var(--primary-foreground);
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.habit-swipe-complete,
+.habit-swipe-skip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+
+[data-swipe="complete"] .habit-swipe-indicator {
+  background: var(--primary);
+  opacity: 1;
+}
+
+[data-swipe="complete"] .habit-swipe-complete,
+[data-swipe="skip"] .habit-swipe-skip {
+  opacity: 1;
+}
+
+[data-swipe="skip"] .habit-swipe-indicator {
+  background: color-mix(in oklab, var(--muted-foreground) 70%, var(--surface));
+  opacity: 1;
+}
+
+.habit-check-pop {
+  animation: habit-check-pop 250ms ease-out;
+}
+
+@keyframes habit-check-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.today-completion-glow::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in oklab, var(--primary) 14%, transparent),
+    transparent 75%
+  );
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  animation: today-completion-glow 1200ms ease-out;
+}
+
+@keyframes today-completion-glow {
+  20%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .today-widget-panel {
   min-width: 0;
 }
@@ -337,6 +418,23 @@ a,
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.today-habit-list-scroll {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: color-mix(in oklab, var(--muted-foreground) 25%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.today-habit-list-scroll > div:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: 0.25rem;
+  background: var(--background);
 }
 
 .habit-details-motion {
@@ -357,6 +455,23 @@ a,
 }
 
 @media (min-width: 1100px) {
+  .today-main-column {
+    display: flex;
+    height: calc(100dvh - 2rem);
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .today-habits-section,
+  .today-habit-list-host,
+  .today-habit-list-scroll {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
   .today-widget-panel {
     position: sticky;
     top: 1rem;
@@ -364,6 +479,23 @@ a,
 }
 
 @media (min-width: 768px) and (max-width: 1099px) {
+  .today-main-column {
+    display: flex;
+    height: calc(100dvh - 2rem);
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .today-habits-section,
+  .today-habit-list-host,
+  .today-habit-list-scroll {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
   .today-widget-panel {
     position: sticky;
     top: 1rem;
@@ -420,6 +552,14 @@ body:has(.today-widget-panel[data-mobile-open="true"]) {
   .habit-details-motion {
     transition: none;
     transform: none;
+  }
+
+  .today-progress-ring,
+  .habit-check-pop,
+  .today-completion-glow::after,
+  .habit-swipe-indicator {
+    animation: none !important;
+    transition: none !important;
   }
 }
 
